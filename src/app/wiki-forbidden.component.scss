@@ -1,0 +1,13 @@
+@use 'controls';
+
+.wiki-forbidden {
+  max-width: 40rem;
+
+  h2 {
+    margin-top: 0;
+  }
+
+  p {
+    color: var(--wiki-text-muted);
+  }
+}

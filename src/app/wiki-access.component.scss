@@ -1,0 +1,67 @@
+@use 'controls';
+
+.wiki-access {
+  max-width: 44rem;
+
+  h2 {
+    margin-top: 0;
+  }
+
+  &__fieldset {
+    border: 1px solid var(--wiki-border);
+    border-radius: var(--wiki-radius);
+    padding: 0.75rem 1rem;
+    margin: 0 0 1rem;
+
+    legend {
+      font-weight: 600;
+      padding: 0 0.4rem;
+    }
+  }
+
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  &__radio {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+  }
+
+  &__submit {
+    margin-top: 0.5rem;
+  }
+
+  &__result {
+    margin-top: 1.25rem;
+
+    h3 {
+      margin-top: 0;
+    }
+
+    dl {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 0.25rem 1rem;
+      margin: 0 0 0.75rem;
+    }
+
+    dt {
+      color: var(--wiki-text-muted);
+      font-weight: 600;
+    }
+
+    dd {
+      margin: 0;
+    }
+
+    &-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+  }
+}

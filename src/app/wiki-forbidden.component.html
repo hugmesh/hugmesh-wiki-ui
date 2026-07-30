@@ -1,0 +1,11 @@
+<section class="wiki-forbidden wiki-panel" role="alert" aria-labelledby="wiki-forbidden-title">
+  <h2 id="wiki-forbidden-title">You don't have access to this view</h2>
+  <p>
+    Your role doesn't include permission for this part of the wiki console. Wiki
+    content authoring requires the admin or superadmin role; management (access
+    history and audit) is superadmin only. If you need access, ask an administrator.
+  </p>
+  @if (canRead()) {
+    <a routerLink="../pages" class="wiki-btn" data-testid="wiki-forbidden-back">Back to content</a>
+  }
+</section>

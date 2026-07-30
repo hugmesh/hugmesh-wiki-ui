@@ -1,0 +1,40 @@
+@use 'controls';
+@use 'tokens' as t;
+
+.wiki-editor {
+  max-width: 52rem;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+
+    h2 {
+      margin: 0;
+      flex: 1;
+    }
+  }
+
+  textarea {
+    font-family: t.$font-mono;
+    resize: vertical;
+  }
+
+  &__preview {
+    margin-bottom: 1rem;
+
+    h3 {
+      margin-top: 0;
+    }
+
+    &-body {
+      line-height: 1.6;
+    }
+  }
+
+  &__actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+}

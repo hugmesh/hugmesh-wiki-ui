@@ -1,0 +1,46 @@
+:host {
+  display: block;
+}
+
+.wiki-head {
+  margin-bottom: 1.5rem;
+
+  h1 {
+    margin: 0 0 0.25rem;
+  }
+
+  &__sub {
+    margin: 0 0 1rem;
+    color: var(--wiki-text-muted);
+  }
+}
+
+.wiki-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--wiki-border);
+  padding-bottom: 0.5rem;
+
+  &__item {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 0.9rem;
+    border-radius: var(--wiki-radius);
+    background: var(--wiki-surface);
+    color: var(--wiki-text);
+    text-decoration: none;
+    border: 1px solid var(--wiki-border);
+
+    &:hover,
+    &:focus-visible {
+      border-color: var(--wiki-accent-soft);
+    }
+
+    &--active {
+      border-color: var(--wiki-accent-soft);
+      color: var(--wiki-accent-soft);
+      font-weight: 700;
+    }
+  }
+}

@@ -1,0 +1,58 @@
+@use 'controls';
+
+.wiki-attachments {
+  margin-top: 1.5rem;
+
+  h3 {
+    margin-top: 0;
+  }
+
+  &__list {
+    list-style: none;
+    margin: 0 0 1rem;
+    padding: 0;
+  }
+
+  &__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--wiki-gap);
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--wiki-border);
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+
+  &__name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  &__meta {
+    font-size: 0.85rem;
+  }
+
+  &__actions {
+    margin-left: auto;
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  &__upload-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--wiki-gap);
+  }
+
+  // Role-gated controls a non-writer cannot use: visibly inert but still
+  // tab-reachable (aria-disabled, NOT disabled) so AT reaches the helptext
+  // explaining the required role — the platform disabled+helptext rule.
+  .wiki-btn[aria-disabled='true'] {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+}

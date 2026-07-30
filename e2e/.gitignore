@@ -1,0 +1,5 @@
+/node_modules
+/.features-gen
+/results
+/test-results
+*.log

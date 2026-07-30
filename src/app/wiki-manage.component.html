@@ -1,0 +1,127 @@
+<div class="wiki-manage">
+  <h2>Management</h2>
+  <p class="wiki-muted">Superadmin-only: active access overrides, a principal's full history, and the content audit trail.</p>
+
+  <!-- ── Active overrides ── -->
+  <section class="wiki-manage__section" role="region" aria-labelledby="wiki-manage-active-title">
+    <h3 id="wiki-manage-active-title">Active access overrides</h3>
+    @if (activeLoading()) {
+      <p class="wiki-muted" role="status">Loading active overrides…</p>
+    } @else if (activeError()) {
+      <p class="wiki-error" role="alert" data-testid="wiki-manage-active-error">{{ activeError() }}</p>
+      <button type="button" class="wiki-btn wiki-btn--secondary" (click)="reloadActive()">Retry</button>
+    } @else if (active().length === 0) {
+      <p class="wiki-muted" data-testid="wiki-manage-active-empty">No active overrides.</p>
+    } @else {
+      <table class="wiki-table" data-testid="wiki-manage-active">
+        <caption class="sr">Active wiki access overrides</caption>
+        <thead>
+          <tr>
+            <th scope="col">User</th>
+            <th scope="col">Type</th>
+            <th scope="col">Granted by</th>
+            <th scope="col">Expires</th>
+            <th scope="col">Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (a of active(); track trackAccessId($index, a)) {
+            <tr class="wiki-access-row">
+              <td>{{ a.userSubject }}</td>
+              <td>{{ a.accessType }}</td>
+              <td>{{ a.grantedBySubject }}</td>
+              <td>{{ a.expiresAt ? (a.expiresAt | date: 'short') : 'never' }}</td>
+              <td>{{ a.reason || '—' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </section>
+
+  <!-- ── History lookup ── -->
+  <section class="wiki-manage__section" role="region" aria-labelledby="wiki-manage-history-title">
+    <h3 id="wiki-manage-history-title">Access history</h3>
+    <form class="wiki-manage__history-form" (ngSubmit)="loadHistory()" novalidate>
+      <div class="wiki-field">
+        <label for="wiki-history-user">User subject</label>
+        <input
+          id="wiki-history-user"
+          name="historyUser"
+          [ngModel]="historyUser()"
+          (ngModelChange)="historyUser.set($event)"
+          data-testid="wiki-manage-history-user"
+          aria-describedby="wiki-history-user-help"
+          autocomplete="off"
+        />
+        <p class="wiki-field__help" id="wiki-history-user-help">
+          Look up the full grant / timeout / ban history (active and revoked) for a user.
+        </p>
+      </div>
+      <button type="submit" class="wiki-btn" [disabled]="historyLoading()" data-testid="wiki-manage-history-submit">
+        {{ historyLoading() ? 'Loading…' : 'Look up history' }}
+      </button>
+    </form>
+
+    @if (historyError()) {
+      <p class="wiki-error" role="alert" data-testid="wiki-manage-history-error">{{ historyError() }}</p>
+    } @else if (history(); as rows) {
+      @if (rows.length === 0) {
+        <p class="wiki-muted" data-testid="wiki-manage-history-empty">No access records for that user.</p>
+      } @else {
+        <table class="wiki-table" data-testid="wiki-manage-history">
+          <caption class="sr">Access history for the looked-up user</caption>
+          <thead>
+            <tr>
+              <th scope="col">Type</th>
+              <th scope="col">State</th>
+              <th scope="col">Granted by</th>
+              <th scope="col">Created</th>
+              <th scope="col">Revoked</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (a of rows; track trackAccessId($index, a)) {
+              <tr>
+                <td>{{ a.accessType }}</td>
+                <td>{{ a.state }}</td>
+                <td>{{ a.grantedBySubject }}</td>
+                <td>{{ a.createdAt | date: 'short' }}</td>
+                <td>{{ a.revokedAt ? (a.revokedAt | date: 'short') : '—' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    }
+  </section>
+
+  <!-- ── Audit trail ── -->
+  <section class="wiki-manage__section" role="region" aria-labelledby="wiki-manage-audit-title">
+    <h3 id="wiki-manage-audit-title">Content audit trail</h3>
+    @if (auditLoading()) {
+      <p class="wiki-muted" role="status">Loading audit trail…</p>
+    } @else if (auditError()) {
+      <p class="wiki-error" role="alert" data-testid="wiki-manage-audit-error">{{ auditError() }}</p>
+      <button type="button" class="wiki-btn wiki-btn--secondary" (click)="reloadAudit()">Retry</button>
+    } @else if (audit().length === 0) {
+      <p class="wiki-muted" data-testid="wiki-manage-audit-empty">No audit entries yet.</p>
+    } @else {
+      <table class="wiki-table" data-testid="wiki-manage-audit">
+        <caption class="sr">Wiki content edit audit trail</caption>
+        <thead>
+          <tr>
+            @for (k of auditKeys(audit()[0]); track k) { <th scope="col">{{ k }}</th> }
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of audit(); track $index) {
+            <tr>
+              @for (k of auditKeys(row); track k) { <td>{{ auditValue(row[k]) }}</td> }
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </section>
+</div>

@@ -1,0 +1,160 @@
+<div class="wiki-access">
+  <h2 id="wiki-access-title">Access control</h2>
+  <p class="wiki-muted" id="wiki-access-help">
+    Grant a user wiki read access, time them out, ban them, or restore access.
+    Changes are recorded for audit. An admin's changes always apply to their own
+    brand; a superadmin names the target brand below.
+  </p>
+
+  <form (ngSubmit)="submit()" novalidate aria-labelledby="wiki-access-title" aria-describedby="wiki-access-help">
+    <fieldset class="wiki-access__fieldset">
+      <legend>Action</legend>
+      <div class="wiki-access__actions" role="radiogroup" aria-label="Access action">
+        @for (a of actions; track a.value) {
+          <label class="wiki-access__radio">
+            <input
+              type="radio"
+              name="action"
+              [value]="a.value"
+              [checked]="action() === a.value"
+              (change)="setAction(a.value)"
+              [attr.data-testid]="'wiki-access-action-' + a.value"
+              [attr.aria-describedby]="'wiki-access-help-' + a.value"
+            />
+            <span>{{ a.label }}</span>
+          </label>
+          <span class="sr" [id]="'wiki-access-help-' + a.value">{{ a.help }}</span>
+        }
+      </div>
+      <p class="wiki-field__help" data-testid="wiki-access-action-help">
+        {{ currentActionHelp() }}
+      </p>
+    </fieldset>
+
+    <div class="wiki-field">
+      <label for="wiki-access-user">User subject</label>
+      <input
+        id="wiki-access-user"
+        name="userSubject"
+        [ngModel]="userSubject()"
+        (ngModelChange)="userSubject.set($event)"
+        data-testid="wiki-access-user"
+        aria-describedby="wiki-access-user-help wiki-access-user-err"
+        [attr.aria-invalid]="userInvalid()"
+        autocomplete="off"
+      />
+      <p class="wiki-field__help" id="wiki-access-user-help">
+        The user's stable Casdoor subject (e.g. <code>google:alice&#64;gmail.com</code>).
+      </p>
+      @if (userInvalid()) {
+        <p class="wiki-error" id="wiki-access-user-err" role="alert">A user subject is required.</p>
+      }
+    </div>
+
+    @if (action() === 'timeout') {
+      <div class="wiki-field">
+        <label for="wiki-access-ttl">Timeout duration (hours)</label>
+        <input
+          id="wiki-access-ttl"
+          name="timeoutHours"
+          type="number"
+          min="1"
+          [ngModel]="timeoutHours()"
+          (ngModelChange)="timeoutHours.set(+$event)"
+          data-testid="wiki-access-ttl"
+          aria-describedby="wiki-access-ttl-help wiki-access-ttl-err"
+          [attr.aria-invalid]="ttlInvalid()"
+        />
+        <p class="wiki-field__help" id="wiki-access-ttl-help">
+          How long the timeout lasts. Read access auto-restores when it expires.
+        </p>
+        @if (ttlInvalid()) {
+          <p class="wiki-error" id="wiki-access-ttl-err" role="alert">Enter a positive number of hours.</p>
+        }
+      </div>
+    }
+
+    @if (showTargetDomain()) {
+      <div class="wiki-field">
+        <label for="wiki-access-target-domain">Target brand</label>
+        <input
+          id="wiki-access-target-domain"
+          name="targetDomain"
+          [ngModel]="targetDomain()"
+          (ngModelChange)="targetDomain.set($event)"
+          data-testid="wiki-access-target-domain"
+          aria-describedby="wiki-access-target-domain-help"
+          maxlength="64"
+          autocomplete="off"
+        />
+        <p class="wiki-field__help" id="wiki-access-target-domain-help">
+          The brand the user belongs to. On a multi-brand deployment a superadmin
+          must name it — the change is rejected otherwise, because it would not
+          apply to the user. Leave blank on a single-brand deployment.
+        </p>
+      </div>
+    }
+
+    <div class="wiki-field">
+      <label for="wiki-access-reason">Reason (optional)</label>
+      <input
+        id="wiki-access-reason"
+        name="reason"
+        [ngModel]="reason()"
+        (ngModelChange)="reason.set($event)"
+        data-testid="wiki-access-reason"
+        aria-describedby="wiki-access-reason-help"
+        autocomplete="off"
+      />
+      <p class="wiki-field__help" id="wiki-access-reason-help">A short note recorded with the change for audit.</p>
+    </div>
+
+    @if (action() === 'ban') {
+      <p class="wiki-warning" role="note" data-testid="wiki-access-ban-note">
+        A ban takes precedence: it blocks the user even if they hold a role or an
+        active grant. Use “Restore” below (or the Manage view) to lift it later.
+      </p>
+    }
+
+    <div class="wiki-access__submit">
+      <button type="submit" class="wiki-btn" [disabled]="busy()" data-testid="wiki-access-submit">
+        {{ busy() ? 'Applying…' : 'Apply' }}
+      </button>
+    </div>
+  </form>
+
+  @if (notice()) {
+    <p class="wiki-success" role="status" data-testid="wiki-access-notice">{{ notice() }}</p>
+  }
+  @if (error()) {
+    <p class="wiki-error" role="alert" data-testid="wiki-access-error">{{ error() }}</p>
+  }
+
+  @if (result(); as r) {
+    <section class="wiki-access__result wiki-panel" role="status" aria-label="Access change result" data-testid="wiki-access-result">
+      <h3>Applied</h3>
+      <dl>
+        <dt>User</dt><dd>{{ r.userSubject }}</dd>
+        <!-- The brand the row ACTUALLY landed in (bff-stamped, server-derived) —
+             lets a superadmin confirm the write hit the intended tenant. -->
+        <dt>Brand</dt><dd data-testid="wiki-access-result-domain">{{ r.domain }}</dd>
+        <dt>Type</dt><dd>{{ r.accessType }}</dd>
+        <dt>State</dt><dd>{{ r.state }}</dd>
+        <dt>Expires</dt><dd>{{ r.expiresAt ? (r.expiresAt | date: 'medium') : 'never (permanent)' }}</dd>
+        @if (r.reason) { <dt>Reason</dt><dd>{{ r.reason }}</dd> }
+      </dl>
+      <div class="wiki-access__result-actions">
+        @if (r.accessType === 'banned' && r.state === 'active') {
+          <button type="button" class="wiki-btn wiki-btn--secondary" (click)="restore(r.userSubject)" data-testid="wiki-access-restore">
+            Restore (lift ban)
+          </button>
+        }
+        @if (r.accessType === 'read' && r.state === 'active') {
+          <button type="button" class="wiki-btn wiki-btn--danger" (click)="removeGrant(r.userSubject)" data-testid="wiki-access-remove">
+            Remove grant
+          </button>
+        }
+      </div>
+    </section>
+  }
+</div>

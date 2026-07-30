@@ -1,0 +1,61 @@
+<div class="wiki-view">
+  @if (loading()) {
+    <p class="wiki-muted" role="status">Loading page…</p>
+  } @else if (error() && !page()) {
+    <p class="wiki-error" role="alert" data-testid="wiki-view-error">{{ error() }}</p>
+    <a routerLink="../../pages" class="wiki-btn wiki-btn--secondary">Back to pages</a>
+  } @else if (page(); as pg) {
+    <header class="wiki-view__head">
+      <div>
+        <h2 data-testid="wiki-view-title">{{ pg.title }}</h2>
+        <p class="wiki-view__meta wiki-muted">
+          <code>{{ pg.slug }}</code> · v{{ pg.version }} · updated {{ pg.updatedAt | date: 'medium' }}
+        </p>
+      </div>
+
+      @if (canWrite()) {
+        <div class="wiki-view__actions">
+          <a
+            [routerLink]="['../', pg.slug, 'edit']"
+            class="wiki-btn wiki-btn--secondary"
+            data-testid="wiki-view-edit"
+            [attr.aria-label]="'Edit the wiki page ' + pg.title"
+            aria-describedby="wiki-view-edit-help"
+          >Edit</a>
+          <span class="sr" id="wiki-view-edit-help">Open this page in the markdown editor.</span>
+
+          <button
+            type="button"
+            class="wiki-btn"
+            (click)="publish()"
+            [disabled]="publishing()"
+            data-testid="wiki-view-publish"
+            [attr.aria-label]="'Publish the wiki page ' + pg.title"
+            aria-describedby="wiki-view-publish-help"
+          >{{ publishing() ? 'Publishing…' : 'Publish' }}</button>
+          <span class="sr" id="wiki-view-publish-help">
+            Mark this page published so the next wiki rebuild packages it for readers.
+          </span>
+        </div>
+      }
+    </header>
+
+    @if (publishMsg()) {
+      <p class="wiki-success" role="status" data-testid="wiki-view-publish-msg">{{ publishMsg() }}</p>
+    }
+    @if (error()) {
+      <p class="wiki-error" role="alert" data-testid="wiki-view-action-error">{{ error() }}</p>
+    }
+
+    <article
+      class="wiki-view__body wiki-panel"
+      role="region"
+      [attr.aria-label]="'Content of ' + pg.title"
+      [innerHTML]="bodyHtml()"
+    ></article>
+
+    <!-- Per-page binary attachments (WikiAttachmentController). List/download for
+         every reader of this view; upload/delete role-gated inside the panel. -->
+    <hug-wiki-attachments [slug]="pg.slug" />
+  }
+</div>

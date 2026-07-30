@@ -1,0 +1,111 @@
+// Shared wiki control styles (buttons, helper text, status colours) the
+// per-component sidecar SCSS pull in via `@use 'controls'`. Centralised so the
+// console's affordances stay visually consistent and the WCAG palette tokens
+// are read from ONE place. (src/styles is on the sass includePaths.)
+
+.wiki-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1rem;
+  border-radius: var(--wiki-radius);
+  background: var(--wiki-accent);
+  color: #ffffff;
+  border: 1px solid var(--wiki-accent);
+  text-decoration: none;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--wiki-accent-soft);
+    color: #0a0a12;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.wiki-btn--secondary {
+  background: transparent;
+  color: var(--wiki-text);
+
+  &:hover,
+  &:focus-visible {
+    background: var(--wiki-surface);
+    color: var(--wiki-text);
+    border-color: var(--wiki-accent-soft);
+  }
+}
+
+.wiki-btn--danger {
+  background: transparent;
+  color: var(--wiki-error);
+  border-color: var(--wiki-error);
+
+  &:hover,
+  &:focus-visible {
+    background: var(--wiki-error);
+    color: #0a0a12;
+  }
+}
+
+.wiki-muted {
+  color: var(--wiki-text-muted);
+}
+
+.wiki-error {
+  color: var(--wiki-error);
+  font-weight: 600;
+}
+
+.wiki-success {
+  color: var(--wiki-success);
+  font-weight: 600;
+}
+
+.wiki-warning {
+  color: var(--wiki-warning);
+  font-weight: 600;
+}
+
+.wiki-field {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+
+  > label,
+  > .wiki-field__label {
+    font-weight: 600;
+  }
+
+  input,
+  textarea,
+  select {
+    width: 100%;
+    padding: 0.5rem 0.65rem;
+    background: var(--wiki-bg);
+    color: var(--wiki-text);
+    border: 1px solid var(--wiki-border);
+    border-radius: var(--wiki-radius);
+    font: inherit;
+
+    &[aria-invalid='true'] {
+      border-color: var(--wiki-error);
+    }
+  }
+
+  &__help {
+    color: var(--wiki-text-muted);
+    font-size: 0.9rem;
+  }
+}
+
+.wiki-panel {
+  background: var(--wiki-surface);
+  border: 1px solid var(--wiki-border);
+  border-radius: var(--wiki-radius);
+  padding: 1.25rem 1.5rem;
+}

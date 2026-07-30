@@ -1,0 +1,51 @@
+{
+  "name": "@hugmesh/wiki",
+  "version": "0.1.0",
+  "description": "Wiki management UI — native-federation remote (exposes ./Wiki at remoteEntry.json on :8080), role-gated content + access console over hugmesh-wiki-bff-api; mounted by the hugmesh.systems host at /wiki.",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve wiki",
+    "build": "ng build wiki",
+    "build:wiki": "ng build wiki",
+    "test": "ng test wiki --watch=false --browsers=ChromeHeadlessCI",
+    "test:watch": "ng test wiki",
+    "gen": "ng-openapi-gen",
+    "gen:spec": "cp \"${WIKI_BFF_SPEC:-../hugmesh-wiki-bff-api/src/main/resources/openapi/openapi.json}\" openapi.json && npm run gen"
+  },
+  "dependencies": {
+    "@angular-architects/native-federation": "^22.0.0",
+    "@angular/animations": "^22.0.2",
+    "@angular/common": "^22.0.2",
+    "@angular/compiler": "^22.0.2",
+    "@angular/core": "^22.0.2",
+    "@angular/forms": "^22.0.2",
+    "@angular/platform-browser": "^22.0.2",
+    "@angular/platform-browser-dynamic": "^22.0.2",
+    "@angular/router": "^22.0.2",
+    "@softarc/native-federation-node": "^3.5.5",
+    "dompurify": "^3.2.4",
+    "es-module-shims": "^2.8.1",
+    "rxjs": "^7.8.2",
+    "tslib": "^2.6.0",
+    "zone.js": "^0.16.1"
+  },
+  "devDependencies": {
+    "@angular-devkit/build-angular": "^22.0.4",
+    "@angular/cli": "^22.0.4",
+    "@angular/compiler-cli": "^22.0.2",
+    "@types/dompurify": "^3.0.5",
+    "@types/jasmine": "^6.0.0",
+    "jasmine-core": "^6.3.0",
+    "karma": "^6.4.4",
+    "karma-chrome-launcher": "^3.2.0",
+    "karma-coverage": "^2.2.1",
+    "karma-jasmine": "^5.1.0",
+    "karma-jasmine-html-reporter": "^2.2.0",
+    "karma-junit-reporter": "^2.0.1",
+    "ng-openapi-gen": "^1.0.5",
+    "ng-packagr": "^22.0.0",
+    "typescript": "~6.0.3"
+  }
+}

@@ -1,0 +1,46 @@
+@use 'controls';
+
+.wiki-manage {
+  h2 {
+    margin-top: 0;
+  }
+
+  &__section {
+    margin-bottom: 2rem;
+
+    h3 {
+      border-bottom: 1px solid var(--wiki-border);
+      padding-bottom: 0.35rem;
+    }
+  }
+
+  &__history-form {
+    display: grid;
+    gap: 0.5rem;
+    max-width: 32rem;
+    margin-bottom: 1rem;
+  }
+}
+
+.wiki-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+
+  caption {
+    text-align: left;
+  }
+
+  th,
+  td {
+    text-align: left;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid var(--wiki-border);
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }
+
+  th {
+    color: var(--wiki-text-muted);
+  }
+}

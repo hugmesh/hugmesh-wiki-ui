@@ -1,0 +1,56 @@
+<div class="wiki-pages">
+  <header class="wiki-pages__head">
+    <h2 id="wiki-pages-title">Pages</h2>
+    @if (canWrite()) {
+      <a
+        routerLink="../new"
+        class="wiki-btn"
+        data-testid="wiki-new-page"
+        aria-label="Create a new wiki page"
+        aria-describedby="wiki-new-page-help"
+      >New page</a>
+      <span class="sr" id="wiki-new-page-help">Author a new wiki page in markdown.</span>
+    }
+  </header>
+
+  @if (loading()) {
+    <p class="wiki-muted" role="status">Loading wiki pages…</p>
+  } @else if (error()) {
+    <p class="wiki-error" role="alert" data-testid="wiki-pages-error">{{ error() }}</p>
+    <button type="button" class="wiki-btn" (click)="reload()">Retry</button>
+  } @else {
+    <section class="wiki-pages__list" role="region" aria-labelledby="wiki-pages-title">
+      @if (pages().length === 0) {
+        <p class="wiki-muted" data-testid="wiki-pages-empty">
+          There are no wiki pages yet.
+          @if (canWrite()) { Use “New page” to create the first one. }
+        </p>
+      } @else {
+        <ul>
+          @for (p of pages(); track trackId($index, p)) {
+            <li class="wiki-page-row" [attr.data-testid]="'wiki-page-' + p.slug">
+              <a
+                [routerLink]="['../pages', p.slug]"
+                class="wiki-page-row__title"
+                [attr.aria-label]="'Read the wiki page ' + p.title"
+              >{{ p.title }}</a>
+              <span class="wiki-page-row__meta">
+                <code class="wiki-page-row__slug">{{ p.slug }}</code>
+                · v{{ p.version }}
+                · updated {{ p.updatedAt | date: 'medium' }}
+              </span>
+              @if (canWrite()) {
+                <a
+                  [routerLink]="['../pages', p.slug, 'edit']"
+                  class="wiki-page-row__edit"
+                  [attr.data-testid]="'wiki-edit-' + p.slug"
+                  [attr.aria-label]="'Edit the wiki page ' + p.title"
+                >Edit</a>
+              }
+            </li>
+          }
+        </ul>
+      }
+    </section>
+  }
+</div>

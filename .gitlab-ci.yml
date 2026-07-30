@@ -1,0 +1,158 @@
+# HugMesh CI — build + push this service's container image to the in-cluster
+# GitLab container registry. The GitHub repo is pull-mirrored into in-cluster
+# GitLab (mirror_trigger_builds=true), so this runs on push / mirror-sync on the
+# privileged x86 runner (shell executor with docker, matching the generator CI).
+# Images carry NO keys — KEYS material is supplied from the USB at first boot.
+
+# Centralized OWASP pen-test stage (SCA + authenticated ZAP DAST baseline) from
+# the generator. Pulls in the hidden `.pentest-*` jobs so this repo has ONE source
+# of truth for the pen-test harness (Dependency-Check SCA + ZAP DAST + probes +
+# nuclei). DEV / CI-PIPELINE ONLY — not a deployed feature.
+include:
+  - project: 'HugMesh/hugmesh-generator'
+    ref: main
+    file: '/tests/pentest/ci/pentest-stage.gitlab-ci.yml'
+
+stages: [test, e2e, build, pentest]
+
+test:
+  stage: test
+  tags: [hugmesh-x86, privileged]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    # WHY the checkout stays read-only. These are SHELL-executor runners, so
+    # $CI_PROJECT_DIR is a PERSISTENT host directory reused across builds. This
+    # container runs as root (node:24-alpine has no USER), and a root container
+    # writing straight into that directory leaves root-owned node_modules/ that
+    # the runner's own non-root user can no longer clean — wedging every later
+    # build. Keeping the checkout `:ro` is therefore worth preserving.
+    #
+    # WHAT WAS BROKEN. `npm ci` MUST create node_modules/ in its working
+    # directory, so mounting the checkout read-only AND working from it
+    # (`-w /workspace` over `:ro`) could never install. It dies immediately:
+    #     npm error code ENOENT
+    #     npm error syscall mkdir
+    #     npm error path /workspace/node_modules
+    # (verified locally against a real read-only bind mount, as uid 0: exit 254
+    # read-only vs exit 0 writable). `npm test` therefore never ran.
+    #
+    # THE FIX. Keep the checkout read-only at /src, and install into /workspace
+    # in the container's OWN writable layer (discarded by --rm). Only the report
+    # directories are bind-mounted back out, and they are chown'd to the runner
+    # user before exit so nothing root-owned is left in the build dir. The test
+    # exit code is propagated, so a real failure still fails the job while its
+    # report is still published.
+    - rm -rf "${CI_PROJECT_DIR}/test-results" "${CI_PROJECT_DIR}/coverage"
+    - mkdir -p "${CI_PROJECT_DIR}/test-results" "${CI_PROJECT_DIR}/coverage"
+    - >-
+      docker run --rm --shm-size=1gb
+      -v "${CI_PROJECT_DIR}:/src:ro"
+      -v "${CI_PROJECT_DIR}/test-results:/out/test-results"
+      -v "${CI_PROJECT_DIR}/coverage:/out/coverage"
+      -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)"
+      -w /workspace node:24-alpine sh -c '
+        set -e;
+        apk add --no-cache chromium;
+        cp -a /src/. /workspace/;
+        rm -rf /workspace/node_modules /workspace/test-results /workspace/coverage;
+        npm ci;
+        set +e;
+        CHROME_BIN=/usr/bin/chromium npm test;
+        rc=$?;
+        mkdir -p /workspace/test-results /workspace/coverage;
+        cp -a /workspace/test-results/. /out/test-results/ 2>/dev/null;
+        cp -a /workspace/coverage/. /out/coverage/ 2>/dev/null;
+        chown -R "$HOST_UID:$HOST_GID" /out;
+        exit $rc;
+      '
+  artifacts:
+    # `when: always` is correct ONLY because the report dirs are wiped before
+    # the run (above) and repopulated solely from this run's output — so a
+    # failed job can never publish a stale green report.
+    when: always
+    paths:
+      - test-results/
+      - coverage/
+    reports:
+      junit: test-results/results.xml
+    expire_in: 7 days
+
+# -----------------------------------------------------------------------------
+# e2e:bdd — Playwright + playwright-bdd Gherkin harness for the wiki-ui remote
+# (e2e/). WAVE 2b SHIPS DARK: every scenario that needs a live stack is tagged
+# `@cluster` and the default playwright config filters them out
+# (`tags: 'not @cluster'`), so this job runs WITHOUT a cluster. It only proves
+# the harness installs, the .feature files COMPILE (bddgen), and the scenarios
+# are DISCOVERABLE (`playwright test --list` via a no-filter override) — the
+# offline gates the PR validates. `allow_failure: true` keeps it NON-BLOCKING
+# (no app-code / karma-unit coupling — it lives entirely under e2e/) while the
+# env-test-build wiring for the live run lands in a later wave; un-skip by
+# dropping a feature's `@cluster` tag then.
+# -----------------------------------------------------------------------------
+e2e:bdd:
+  stage: e2e
+  needs: []
+  tags: [hugmesh-x86, privileged]
+  allow_failure: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    # node:24 (not -alpine) — Playwright's CLI prefers glibc; we never launch a
+    # browser here (compile + list only), so no browser download is needed.
+    - >-
+      docker run --rm -v "${CI_PROJECT_DIR}/e2e:/e2e" -w /e2e node:24 sh -c '
+        npm ci &&
+        npx bddgen &&
+        printf "%s\n" \
+          "import { defineConfig, devices } from \"@playwright/test\";" \
+          "import { defineBddConfig } from \"playwright-bdd\";" \
+          "const d = defineBddConfig({ features: \"features/**/*.feature\", steps: [\"features/steps/**/*.ts\", \"features/support/**/*.ts\"] });" \
+          "export default defineConfig({ reporter: [[\"list\"]], use: { ignoreHTTPSErrors: true, screenshot: \"on\", video: \"on\" }, projects: [{ name: \"bdd\", testDir: d, use: { ...devices[\"Desktop Chrome\"] } }] });" \
+          > pw-validate.config.ts &&
+        npx bddgen -c pw-validate.config.ts &&
+        npx playwright test --list -c pw-validate.config.ts
+      '
+  artifacts:
+    when: always
+    paths:
+      - e2e/results/
+    expire_in: 7 days
+
+build:image:
+  needs: [test]
+  stage: build
+  tags: [hugmesh-x86, privileged]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    # Immutable tag = release tag or git SHA; plus a moving branch tag the deploy/
+    # kustomize can track for dev.
+    - export TAG="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
+    - docker build --pull -t "$CI_REGISTRY_IMAGE:$TAG" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" .
+    - docker push "$CI_REGISTRY_IMAGE:$TAG"
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
+
+# --- OWASP pen-test stage ----------------------------------------------------
+# Thin jobs that extend the centralized hidden jobs from the included
+# pentest-stage.gitlab-ci.yml. allow_failure so a finding doesn't break the
+# pipeline (the SCA/DAST reports + MR security widget surface the issues), and
+# rules mirror this repo's security-job posture (default branch + merge request).
+pentest:sca:
+  extends: .pentest-sca
+  allow_failure: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+pentest:dast:
+  extends: .pentest-dast-baseline
+  allow_failure: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'

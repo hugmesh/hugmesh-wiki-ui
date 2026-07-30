@@ -1,0 +1,109 @@
+<div class="wiki-editor">
+  <header class="wiki-editor__head">
+    <h2 data-testid="wiki-editor-title">{{ isEdit() ? 'Edit page' : 'New page' }}</h2>
+    <a routerLink="../pages" class="wiki-btn wiki-btn--secondary" data-testid="wiki-editor-cancel">Cancel</a>
+  </header>
+
+  @if (loading()) {
+    <p class="wiki-muted" role="status">Loading page…</p>
+  } @else {
+    <form (ngSubmit)="submit()" novalidate>
+      @if (!isEdit()) {
+        <div class="wiki-field">
+          <label for="wiki-slug">Slug</label>
+          <input
+            id="wiki-slug"
+            name="slug"
+            [ngModel]="slug()"
+            (ngModelChange)="slug.set($event)"
+            data-testid="wiki-editor-slug"
+            aria-describedby="wiki-slug-help wiki-slug-err"
+            [attr.aria-invalid]="slugInvalid()"
+            autocomplete="off"
+          />
+          <p class="wiki-field__help" id="wiki-slug-help">
+            The page's URL key — lowercase letters, numbers and hyphens (e.g.
+            <code>getting-started</code>). It cannot be changed after creation.
+          </p>
+          @if (slugInvalid()) {
+            <p class="wiki-error" id="wiki-slug-err" role="alert">
+              Enter a slug using only lowercase letters, numbers and single hyphens.
+            </p>
+          }
+        </div>
+      } @else {
+        <p class="wiki-field__help">
+          Editing <code>{{ slug() }}</code> (version {{ expectedVersion() }}). The slug is fixed.
+        </p>
+      }
+
+      <div class="wiki-field">
+        <label for="wiki-title">Title</label>
+        <input
+          id="wiki-title"
+          name="title"
+          [ngModel]="title()"
+          (ngModelChange)="title.set($event)"
+          data-testid="wiki-editor-title-input"
+          aria-describedby="wiki-title-help wiki-title-err"
+          [attr.aria-invalid]="titleInvalid()"
+        />
+        <p class="wiki-field__help" id="wiki-title-help">The page heading shown to readers.</p>
+        @if (titleInvalid()) {
+          <p class="wiki-error" id="wiki-title-err" role="alert">A title is required.</p>
+        }
+      </div>
+
+      <div class="wiki-field">
+        <label for="wiki-body">Content (markdown)</label>
+        <textarea
+          id="wiki-body"
+          name="body"
+          rows="14"
+          [ngModel]="body()"
+          (ngModelChange)="body.set($event)"
+          data-testid="wiki-editor-body"
+          aria-describedby="wiki-body-help wiki-body-err"
+          [attr.aria-invalid]="bodyInvalid()"
+        ></textarea>
+        <p class="wiki-field__help" id="wiki-body-help">
+          Write the page in markdown (headings, bold, lists, links). The preview
+          below is approximate; the server renders the final HTML when you save.
+        </p>
+        @if (bodyInvalid()) {
+          <p class="wiki-error" id="wiki-body-err" role="alert">Page content is required.</p>
+        }
+      </div>
+
+      <section class="wiki-editor__preview wiki-panel" role="region" aria-label="Content preview">
+        <h3>Preview</h3>
+        <div class="wiki-editor__preview-body" [innerHTML]="previewHtml()" data-testid="wiki-editor-preview"></div>
+      </section>
+
+      @if (notice()) {
+        <p class="wiki-muted" role="status" data-testid="wiki-editor-notice">{{ notice() }}</p>
+      }
+      @if (error()) {
+        <p class="wiki-error" role="alert" data-testid="wiki-editor-error">{{ error() }}</p>
+        @if (conflict() && isEdit()) {
+          <button type="button" class="wiki-btn wiki-btn--secondary" (click)="reloadLatest()" data-testid="wiki-editor-reload">
+            Reload latest version
+          </button>
+        }
+      }
+
+      <div class="wiki-editor__actions">
+        <button
+          type="submit"
+          class="wiki-btn"
+          [disabled]="busy()"
+          data-testid="wiki-editor-save"
+          aria-describedby="wiki-save-help"
+        >{{ busy() ? 'Saving…' : isEdit() ? 'Save changes' : 'Create page' }}</button>
+        <span class="sr" id="wiki-save-help">
+          {{ isEdit() ? 'Save your edits — the server bumps the page version.' : 'Create the page at version 1.' }}
+        </span>
+      </div>
+    </form>
+  }
+</div>

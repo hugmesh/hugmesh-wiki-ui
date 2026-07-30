@@ -1,0 +1,15 @@
+:host {
+  display: block;
+  min-height: 100vh;
+}
+
+main {
+  display: block;
+  padding: 1.5rem;
+  max-width: 72rem;
+  margin: 0 auto;
+
+  &:focus {
+    outline: none;
+  }
+}

@@ -1,0 +1,89 @@
+<section
+  class="wiki-attachments wiki-panel"
+  aria-labelledby="wiki-att-title"
+  data-testid="wiki-attachments"
+>
+  <h3 id="wiki-att-title">Attachments</h3>
+
+  @if (loading()) {
+    <p class="wiki-muted" role="status">Loading attachments…</p>
+  } @else if (loadError()) {
+    <p class="wiki-error" role="alert" data-testid="wiki-att-load-error">{{ loadError() }}</p>
+  } @else if (attachments().length === 0) {
+    <p class="wiki-muted" data-testid="wiki-att-empty">No attachments on this page.</p>
+  } @else {
+    <ul class="wiki-attachments__list" data-testid="wiki-att-list">
+      @for (att of attachments(); track att.id) {
+        <li class="wiki-attachments__row">
+          <span class="wiki-attachments__name">{{ att.filename }}</span>
+          <span class="wiki-attachments__meta wiki-muted">
+            {{ att.mimeType }} · {{ att.createdAt | date: 'medium' }}
+          </span>
+          <span class="wiki-attachments__actions">
+            <button
+              type="button"
+              class="wiki-btn wiki-btn--secondary"
+              (click)="download(att)"
+              [disabled]="busyFile() === att.filename"
+              [attr.data-testid]="'wiki-att-download-' + att.filename"
+              [attr.aria-label]="'Download the attachment ' + att.filename"
+            >Download</button>
+            <!-- Delete = WIKI_WRITE. For a non-writer the control is rendered
+                 VISIBLY DISABLED (aria-disabled keeps it tab-reachable so AT
+                 reaches the role helptext) — the disabled+helptext rule. -->
+            <button
+              type="button"
+              class="wiki-btn wiki-btn--danger"
+              (click)="remove(att.filename)"
+              [disabled]="canWrite() && busyFile() === att.filename"
+              [attr.aria-disabled]="!canWrite() ? true : null"
+              [attr.aria-describedby]="!canWrite() ? 'wiki-att-write-help' : null"
+              [attr.data-testid]="'wiki-att-delete-' + att.filename"
+              [attr.aria-label]="'Delete the attachment ' + att.filename"
+            >Delete</button>
+          </span>
+        </li>
+      }
+    </ul>
+  }
+
+  @if (notice()) {
+    <p class="wiki-success" role="status" data-testid="wiki-att-notice">{{ notice() }}</p>
+  }
+  @if (actionError()) {
+    <p class="wiki-error" role="alert" data-testid="wiki-att-error">{{ actionError() }}</p>
+  }
+
+  <div class="wiki-attachments__upload wiki-field">
+    <label for="wiki-att-file">Add an attachment</label>
+    <div class="wiki-attachments__upload-row">
+      <input
+        id="wiki-att-file"
+        type="file"
+        #fileInput
+        (change)="onFileChange($event)"
+        [disabled]="!canWrite()"
+        aria-describedby="wiki-att-write-help"
+        data-testid="wiki-att-file"
+      />
+      <!-- Upload = WIKI_WRITE; same disabled+helptext treatment as Delete. -->
+      <button
+        type="button"
+        class="wiki-btn"
+        (click)="upload(fileInput)"
+        [disabled]="canWrite() && uploading()"
+        [attr.aria-disabled]="!canWrite() ? true : null"
+        aria-describedby="wiki-att-write-help"
+        data-testid="wiki-att-upload"
+      >{{ uploading() ? 'Uploading…' : 'Upload' }}</button>
+    </div>
+    <p class="wiki-field__help" id="wiki-att-write-help" data-testid="wiki-att-write-help">
+      @if (canWrite()) {
+        The file is stored with this page; readers download it with their wiki session.
+      } @else {
+        Uploading and deleting attachments requires the ADMIN or SUPERADMIN role —
+        your role can list and download only.
+      }
+    </p>
+  </div>
+</section>
