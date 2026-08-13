@@ -17,7 +17,13 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-RUN npm run build:wiki
+# --base-href is REQUIRED, not cosmetic. Without it Angular emits asset URLs
+# rooted at / , but the gateway serves this app under /wiki/ — so every
+# bundle request lands on the SPA catch-all and comes back as index.html with
+# HTTP 200 and content-type text/html instead of JS. The browser then fails
+# with a syntax/JSON parse error on markup, which reads as a corrupt build
+# rather than a routing problem. tube-ui and user-ui already carry this flag.
+RUN npm run build:wiki -- --base-href=/wiki/
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
