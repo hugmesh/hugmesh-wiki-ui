@@ -3,7 +3,7 @@ import { RouterOutlet } from '@angular/router';
 
 /**
  * Standalone dev shell for the Wiki remote. Only used when this remote is run on
- * its own (`ng serve wiki`); in production the hugmesh.systems host federates
+ * its own (`ng serve wiki`); in production the hugmesh.net host federates
  * `./Wiki` (WIKI_ROUTES) directly and mounts them at /wiki — this shell is not
  * loaded.
  */

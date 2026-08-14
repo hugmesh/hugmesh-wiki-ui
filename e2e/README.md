@@ -6,7 +6,7 @@ the proven `hugmesh-games/e2e` pattern (`@playwright/test` +
 reporter, the per-step PNG `AfterStep` hook in
 `features/support/fixtures.ts`).
 
-The wiki-ui is a native-federation **remote** mounted by the hugmesh.systems
+The wiki-ui is a native-federation **remote** mounted by the hugmesh.net
 host at `/wiki` (the host gates the whole mount behind route-access `ROLE_WIKI`);
 the **child guards** then enforce the per-view wiki role boundary. The role model
 (`src/app/session.service.ts`, mirroring `hugmesh-wiki-bff-api`

@@ -1,7 +1,7 @@
 # hugmesh-wiki-ui
 
 The **wiki management UI** for the [HugMesh](https://github.com/hugmesh-net)
-platform — an Angular **native-federation remote** that the `hugmesh.systems`
+platform — an Angular **native-federation remote** that the `hugmesh.net`
 host shell mounts at **`/wiki`** and exposes via its navigation menu, gated to
 users who hold the `wiki` role. It is the front-end console for
 [`hugmesh-wiki-bff-api`](https://github.com/hugmesh-net/hugmesh-wiki-bff-api),
@@ -32,7 +32,7 @@ This remote therefore:
 - is **internal** — it sits behind the gateway's `/wiki → ROLE_WIKI` route-access
   guard and is never reachable as a public surface.
 
-`federation-base.js` is kept **byte-identical** to the `hugmesh.systems` host
+`federation-base.js` is kept **byte-identical** to the `hugmesh.net` host
 shell's copy. This file is the single source of truth for the shared-dependency
 surface and the RxJS skip list; keeping it identical prevents this remote from
 drifting out of sync with the host or with the other HugMesh remotes.
@@ -40,7 +40,7 @@ drifting out of sync with the host or with the other HugMesh remotes.
 ```mermaid
 sequenceDiagram
     participant Browser
-    participant Host as hugmesh.systems host shell
+    participant Host as hugmesh.net host shell
     participant Gateway as HugMesh Gateway
     participant WikiUI as hugmesh-wiki-ui :8080
     participant BFF as hugmesh-wiki-bff-api

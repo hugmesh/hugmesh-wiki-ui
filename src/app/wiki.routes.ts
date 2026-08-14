@@ -9,7 +9,7 @@ import { WikiForbiddenComponent } from './wiki-forbidden.component';
 import { wikiReadGuard, wikiWriteGuard, wikiManageGuard } from './wiki.guard';
 
 /**
- * The exposed `./Wiki` module — mounted by the hugmesh.systems host at the
+ * The exposed `./Wiki` module — mounted by the hugmesh.net host at the
  * apex path /wiki (the federation-api wiki module row #16: mountAt '/wiki',
  * remote_entry_url http://hugmesh-wiki-ui:8080/remoteEntry.json,
  * requiresRole 'wiki', visibility internal). The host gates the WHOLE /wiki mount

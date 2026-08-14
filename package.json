@@ -1,7 +1,7 @@
 {
   "name": "@hugmesh/wiki",
   "version": "0.1.0",
-  "description": "Wiki management UI — native-federation remote (exposes ./Wiki at remoteEntry.json on :8080), role-gated content + access console over hugmesh-wiki-bff-api; mounted by the hugmesh.systems host at /wiki.",
+  "description": "Wiki management UI — native-federation remote (exposes ./Wiki at remoteEntry.json on :8080), role-gated content + access console over hugmesh-wiki-bff-api; mounted by the hugmesh.net host at /wiki.",
   "license": "MIT",
   "private": true,
   "scripts": {

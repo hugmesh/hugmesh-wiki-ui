@@ -1,6 +1,6 @@
 # hugmesh-wiki-ui — builds the Wiki management native-federation REMOTE
 # (src → dist/wiki/browser) and serves it via nginx with CORS so the
-# hugmesh.systems host can fetch its remoteEntry.json cross-origin.
+# hugmesh.net host can fetch its remoteEntry.json cross-origin.
 #
 # Serves on :8080 to MATCH the federation-api wiki module registration (#16):
 #   remote_entry_url = http://hugmesh-wiki-ui:8080/remoteEntry.json
