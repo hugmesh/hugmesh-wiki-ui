@@ -8,6 +8,11 @@
   <meta name="theme-color" content="#0a0a12" />
   <meta name="description" content="HugMesh Wiki — the platform's federated wiki console for authoring, access control and content management." />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
+  <!-- Runtime theme (fleet 50-snap-theme.sh mechanism): RELATIVE href so it
+       resolves under this app's mount behind the gateway; the file's
+       :root:root block out-specifies the compiled :root fallbacks regardless
+       of stylesheet order. Empty when unthemed (zero-byte 200, no 404). -->
+  <link rel="stylesheet" href="snap-theme.css">
 </head>
 <body>
   <hug-wiki-root></hug-wiki-root>
