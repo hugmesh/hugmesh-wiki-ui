@@ -1,14 +1,21 @@
-$black:    #0a0a0a;
-$charcoal: #111111;
-$surface:  #1c1c1c;
-$mid:      #3a3a3a;
-$muted:    #777777;
-$light:    #bbbbbb;
-$offwhite: #e8e8e8;
+// RUNTIME-THEMABLE (fleet contract): each colour token compiles to a
+// var(--hug-*, <shipped hex>) reference, so /snap-theme.css (SNAP_THEME_CSS)
+// repaints EVERY use site at runtime — not just the handful styles.scss maps.
+// The shipped hex stays as the fallback: an unthemed mesh renders byte-identical.
+$black:    var(--hug-black, #0a0a0a);
+$charcoal: var(--hug-charcoal, #111111);
+$surface:  var(--hug-surface, #1c1c1c);
+$mid:      var(--hug-mid, #3a3a3a);
+$muted:    var(--hug-muted, #777777);
+$light:    var(--hug-light, #bbbbbb);
+$offwhite: var(--hug-offwhite, #e8e8e8);
 
-$neon:        #ffd700;
-$neon-bright: #ffe566;
-$neon-dim:    #cc9900;
+// The accent family maps onto the two-token accent contract. bright/dim
+// collapse toward accent/accent-soft when themed (no --hug-accent-bright/-dim
+// exists); unthemed they keep their distinct shipped hexes via the fallbacks.
+$neon:        var(--hug-accent, #ffd700);
+$neon-bright: var(--hug-accent, #ffe566);
+$neon-dim:    var(--hug-accent-soft, #cc9900);
 
 $pastel-rose:     #ffc8dd;
 $pastel-lavender: #d0b4f5;
