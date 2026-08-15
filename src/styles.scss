@@ -34,6 +34,15 @@
   --wiki-text:        var(--hug-text);
   --wiki-text-muted:  var(--hug-text-muted);
   --wiki-accent:      var(--hug-accent);
+  /* Text ON a filled --wiki-accent. The platform token auto-picks pure #000 or
+     #fff from the THEMED accent's luminance, which is the only way a filled
+     button stays legible once an operator retints: hardcoded white measures
+     1.16:1 on the nonbinary preset's #fcf434 and 1.25:1 on high-contrast's
+     #00ffff. The #ffffff fallback is today's shipped literal, so an unthemed
+     build (empty snap-theme.css) renders byte-identically on the #7c4dff fill.
+     Deliberately paired with --wiki-accent one line up: both resolve, or
+     neither does, so accent-on can never land on a non-accent background. */
+  --wiki-accent-on:   var(--hug-accent-on, #ffffff);
   --wiki-accent-soft: var(--hug-accent-soft);
   --wiki-success:     var(--hug-success);
   --wiki-warning:     var(--hug-warning);

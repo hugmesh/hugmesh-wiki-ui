@@ -10,7 +10,12 @@
   padding: 0.5rem 1rem;
   border-radius: var(--wiki-radius);
   background: var(--wiki-accent);
-  color: #ffffff;
+  // Accent FILL, so the label must track the accent's luminance — white here was
+  // invisible (1.16:1) once an operator themed the accent yellow. The literal
+  // fallback keeps the unthemed purple button unchanged, and it also covers the
+  // case where the wiki aliases are absent: no --wiki-accent means no accent
+  // fill, and then white is still the right answer for the dark shell.
+  color: var(--wiki-accent-on, #ffffff);
   border: 1px solid var(--wiki-accent);
   text-decoration: none;
   font-weight: 600;
