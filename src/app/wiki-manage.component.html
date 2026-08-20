@@ -99,6 +99,24 @@
   <!-- ── Audit trail ── -->
   <section class="wiki-manage__section" role="region" aria-labelledby="wiki-manage-audit-title">
     <h3 id="wiki-manage-audit-title">Content audit trail</h3>
+    <div class="wiki-field wiki-manage__audit-limit">
+      <label for="wiki-audit-limit">Rows to load</label>
+      <select
+        id="wiki-audit-limit"
+        [ngModel]="auditLimit()"
+        (ngModelChange)="setAuditLimit($event)"
+        [disabled]="auditLoading()"
+        data-testid="wiki-manage-audit-limit"
+        aria-describedby="wiki-audit-limit-help"
+      >
+        @for (n of auditLimits; track n) {
+          <option [ngValue]="n">{{ n }}</option>
+        }
+      </select>
+      <p class="wiki-field__help" id="wiki-audit-limit-help">
+        Newest first. The server bounds the trail to 1000 rows per read and defaults to 200.
+      </p>
+    </div>
     @if (auditLoading()) {
       <p class="wiki-muted" role="status">Loading audit trail…</p>
     } @else if (auditError()) {

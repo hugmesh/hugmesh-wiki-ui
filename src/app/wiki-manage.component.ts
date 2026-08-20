@@ -11,7 +11,7 @@ import { WikiService, WikiAccess, WikiApiError } from './wiki.service';
  *
  *   active list → GET /bff/wiki/superadmin/access
  *   history     → GET /bff/wiki/superadmin/access/{user}/history
- *   audit trail → GET /bff/wiki/superadmin/audit
+ *   audit trail → GET /bff/wiki/superadmin/audit?limit=… (bounded, newest first)
  *
  * a11y: each section is a labelled region; the tables are real <table> with
  * scope'd headers + captions; the history lookup form has labelled controls +
@@ -39,6 +39,14 @@ export class WikiManageComponent implements OnInit {
   readonly audit = signal<Array<Record<string, unknown>>>([]);
   readonly auditLoading = signal(true);
   readonly auditError = signal('');
+
+  /** The page sizes the audit-trail control offers. The bff clamps ?limit to
+   *  [1, 1000] and defaults to 200 when unset, so these are the useful stops
+   *  inside that bound — 1000 is the server's ceiling, not ours. */
+  readonly auditLimits: readonly number[] = [50, 100, 200, 500, 1000];
+
+  /** Selected audit page size; starts at the bff's own default (200). */
+  readonly auditLimit = signal(200);
 
   /**
    * Track-by for the active-access and history tables.
@@ -95,21 +103,33 @@ export class WikiManageComponent implements OnInit {
   }
 
   /**
-   * Fetch the wiki content-edit audit trail.
-   * Calls GET /bff/wiki/superadmin/audit.
+   * Fetch the wiki content-edit audit trail at the selected page size.
+   * Calls GET /bff/wiki/superadmin/audit?limit={@link auditLimit} (newest first).
    * The audit DTO is BFF-defined (untyped record list); rendered generically.
    */
   async reloadAudit(): Promise<void> {
     this.auditLoading.set(true);
     this.auditError.set('');
     try {
-      const res = await this.wiki.auditTrail();
+      const res = await this.wiki.auditTrail(this.auditLimit());
       this.audit.set(res.actions ?? []);
     } catch (e) {
       this.auditError.set(this.message(e, 'audit trail'));
     } finally {
       this.auditLoading.set(false);
     }
+  }
+
+  /**
+   * Change the audit page size and re-read the trail at the new bound.
+   * The bff re-clamps whatever it is sent, so an out-of-range value can only
+   * ever cost a round-trip, never an unbounded scan.
+   *
+   * @param limit - The requested row count (one of {@link auditLimits}).
+   */
+  setAuditLimit(limit: number): void {
+    this.auditLimit.set(limit);
+    void this.reloadAudit();
   }
 
   /**

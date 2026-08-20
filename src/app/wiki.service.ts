@@ -405,9 +405,12 @@ export class WikiService {
 
   /** GET /bff/wiki/superadmin/audit → { actions:[...] } — the wiki_audit_log
    *  content-edit trail. The shape is bff-defined (a list of audit rows); we
-   *  surface it untyped (Record) since the audit DTO is not on the typed boundary. */
-  async auditTrail(): Promise<{ actions: Array<Record<string, unknown>> }> {
-    const body = await this.content.wikiAuditTrail().catch((e) =>
+   *  surface it untyped (Record) since the audit DTO is not on the typed boundary.
+   *  `limit` is the optional page size the bff clamps to [1, 1000]; leave it
+   *  unset to take the server default (200, newest first) — an omitted limit
+   *  sends no query param at all, exactly as before. */
+  async auditTrail(limit?: number): Promise<{ actions: Array<Record<string, unknown>> }> {
+    const body = await this.content.wikiAuditTrail({ limit }).catch((e) =>
       this.mapHttpError(e),
     );
     return body as unknown as { actions: Array<Record<string, unknown>> };
