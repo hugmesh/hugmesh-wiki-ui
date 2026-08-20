@@ -29,6 +29,24 @@
     gap: 0.5rem;
   }
 
+  &__confirm {
+    margin-bottom: 1rem;
+    border-color: var(--wiki-error);
+
+    h3 {
+      margin: 0 0 0.5rem;
+    }
+
+    p {
+      margin: 0 0 0.75rem;
+    }
+  }
+
+  &__confirm-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
   &__body {
     line-height: 1.6;
 

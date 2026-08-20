@@ -24,8 +24,9 @@ describe('WikiPageViewComponent (rendered page)', () => {
   beforeEach(async () => {
     // getPage/publishPage drive this view; listAttachments feeds the embedded
     // hug-wiki-attachments panel (exercised in depth in its own spec).
-    wiki = jasmine.createSpyObj<WikiService>('WikiService', ['getPage', 'publishPage', 'listAttachments']);
+    wiki = jasmine.createSpyObj<WikiService>('WikiService', ['getPage', 'publishPage', 'deletePage', 'listAttachments']);
     wiki.getPage.and.resolveTo(page());
+    wiki.deletePage.and.resolveTo();
     wiki.listAttachments.and.resolveTo({ attachments: [] });
     await TestBed.configureTestingModule({
       imports: [WikiPageViewComponent],
@@ -68,11 +69,12 @@ describe('WikiPageViewComponent (rendered page)', () => {
     expect(body.querySelector('script')).withContext('script stripped').toBeNull();
   });
 
-  it('hides Edit + Publish for a read-only reader', async () => {
+  it('hides Edit + Publish + Delete for a read-only reader', async () => {
     canWrite.set(false);
     await render();
     expect(el().querySelector('[data-testid="wiki-view-edit"]')).toBeNull();
     expect(el().querySelector('[data-testid="wiki-view-publish"]')).toBeNull();
+    expect(el().querySelector('[data-testid="wiki-view-delete"]')).toBeNull();
   });
 
   it('shows Edit + Publish for a writer and publishes', async () => {
@@ -92,5 +94,64 @@ describe('WikiPageViewComponent (rendered page)', () => {
     wiki.getPage.and.rejectWith(new WikiApiError(404, 'gone'));
     await render();
     expect(el().querySelector('[data-testid="wiki-view-error"]')!.textContent).toContain('does not exist');
+  });
+
+  // --- Delete (DELETE /bff/wiki/admin/pages/{slug}, WIKI_WRITE) ------------
+  // Destructive + cascading, so it is two-step: the button only ARMS an inline
+  // confirmation and the confirm button is the one that calls the bff.
+
+  async function armDelete() {
+    canWrite.set(true);
+    await render();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete"]')!.click();
+    fixture.detectChanges();
+  }
+  async function settle() {
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  it('arms the inline confirmation and does NOT call the bff on the first click', async () => {
+    await armDelete();
+    const confirm = el().querySelector('[data-testid="wiki-view-delete-confirm"]')!;
+    expect(confirm).not.toBeNull();
+    expect(confirm.textContent).toContain('getting-started');
+    expect(wiki.deletePage).not.toHaveBeenCalled();
+  });
+
+  it('Cancel dismisses the confirmation without deleting', async () => {
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-cancel"]')!.click();
+    await settle();
+    expect(el().querySelector('[data-testid="wiki-view-delete-confirm"]')).toBeNull();
+    expect(wiki.deletePage).not.toHaveBeenCalled();
+    expect(el().querySelector('[data-testid="wiki-view-title"]')).not.toBeNull();
+  });
+
+  it('confirming deletes the page and replaces the body with the ack', async () => {
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    expect(wiki.deletePage).toHaveBeenCalledWith('getting-started');
+    const ack = el().querySelector('[data-testid="wiki-view-deleted"]')!;
+    expect(ack).not.toBeNull();
+    expect(ack.getAttribute('role')).toBe('status');
+    expect(ack.textContent).toContain('getting-started');
+    // The page (and with it the attachments panel) is gone, not left stale.
+    expect(el().querySelector('[data-testid="wiki-view-title"]')).toBeNull();
+    expect(el().querySelector('[data-testid="wiki-attachments"]')).toBeNull();
+  });
+
+  it('surfaces a 403 delete denial and keeps the page rendered', async () => {
+    wiki.deletePage.and.rejectWith(new WikiApiError(403, 'no'));
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    const err = el().querySelector('[data-testid="wiki-view-action-error"]')!;
+    expect(err).not.toBeNull();
+    expect(err.getAttribute('role')).toBe('alert');
+    expect(err.textContent).toContain('ADMIN or SUPERADMIN');
+    expect(el().querySelector('[data-testid="wiki-view-deleted"]')).toBeNull();
+    expect(el().querySelector('[data-testid="wiki-view-title"]')).not.toBeNull();
   });
 });

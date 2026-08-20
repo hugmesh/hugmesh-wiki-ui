@@ -1,6 +1,11 @@
 <div class="wiki-view">
   @if (loading()) {
     <p class="wiki-muted" role="status">Loading page…</p>
+  } @else if (deleted()) {
+    <p class="wiki-success" role="status" data-testid="wiki-view-deleted">
+      Deleted <code>{{ slug() }}</code> and its attachments.
+    </p>
+    <a routerLink="../../pages" class="wiki-btn wiki-btn--secondary">Back to pages</a>
   } @else if (error() && !page()) {
     <p class="wiki-error" role="alert" data-testid="wiki-view-error">{{ error() }}</p>
     <a routerLink="../../pages" class="wiki-btn wiki-btn--secondary">Back to pages</a>
@@ -36,9 +41,55 @@
           <span class="sr" id="wiki-view-publish-help">
             Mark this page published so the next wiki rebuild packages it for readers.
           </span>
+
+          <!-- Delete = WIKI_WRITE and DESTRUCTIVE (the bff cascades to this
+               page's attachments), so this button only ARMS the inline
+               confirmation below — the bff call is its confirm button. -->
+          <button
+            type="button"
+            class="wiki-btn wiki-btn--danger"
+            (click)="askDelete()"
+            [disabled]="deleting()"
+            data-testid="wiki-view-delete"
+            [attr.aria-label]="'Delete the wiki page ' + pg.title"
+            aria-describedby="wiki-view-delete-help"
+          >Delete</button>
+          <span class="sr" id="wiki-view-delete-help">
+            Permanently remove this page and its attachments. You are asked to confirm first.
+          </span>
         </div>
       }
     </header>
+
+    @if (confirmingDelete()) {
+      <section
+        class="wiki-view__confirm wiki-panel"
+        aria-labelledby="wiki-view-confirm-title"
+        data-testid="wiki-view-delete-confirm"
+      >
+        <h3 id="wiki-view-confirm-title">Delete this page?</h3>
+        <p class="wiki-warning" role="alert">
+          <code>{{ pg.slug }}</code> and every attachment on it will be removed. This cannot be undone.
+        </p>
+        <div class="wiki-view__confirm-actions">
+          <button
+            type="button"
+            class="wiki-btn wiki-btn--danger"
+            (click)="remove()"
+            [disabled]="deleting()"
+            data-testid="wiki-view-delete-confirm-yes"
+            [attr.aria-label]="'Confirm deleting the wiki page ' + pg.title"
+          >{{ deleting() ? 'Deleting…' : 'Delete permanently' }}</button>
+          <button
+            type="button"
+            class="wiki-btn wiki-btn--secondary"
+            (click)="cancelDelete()"
+            [disabled]="deleting()"
+            data-testid="wiki-view-delete-cancel"
+          >Cancel</button>
+        </div>
+      </section>
+    }
 
     @if (publishMsg()) {
       <p class="wiki-success" role="status" data-testid="wiki-view-publish-msg">{{ publishMsg() }}</p>

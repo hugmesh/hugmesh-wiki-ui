@@ -289,11 +289,14 @@ export class WikiService {
     return body as unknown as PublishResult;
   }
 
-  // TODO: DELETE /bff/wiki/admin/pages/{slug} (ADMIN/SUPERADMIN, cascades to
-  // attachments, audited) is a real wiki-bff endpoint and the generated
-  // `this.content.wikiDeletePage()` client method already exists, but nothing
-  // wraps it here and no component exposes a delete action — a page currently
-  // cannot be deleted from this console. See README "Known Gaps / TODO".
+  /** DELETE /bff/wiki/admin/pages/{slug} → 204 no-content. The bff cascades to
+   *  the page's attachments and audits the removal; resolve = deleted. 404 when
+   *  the slug is not in the caller's brand. */
+  async deletePage(slug: string): Promise<void> {
+    await this.content.wikiDeletePage({ slug }).catch((e) =>
+      this.mapHttpError(e),
+    );
+  }
 
   // ----- ATTACHMENTS: read (WIKI_READ + the WikiAccessGuard overlay) -------
   //

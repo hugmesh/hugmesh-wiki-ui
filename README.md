@@ -147,6 +147,8 @@ ng-openapi-gen clients (see **Typed API client** below). Auth rides the
 - `PUT  /bff/wiki/admin/pages/{slug}` → update page (`WikiDto.UpdatePage` with
   `expectedVersion` for optimistic-lock; 409 on stale edit)
 - `POST /bff/wiki/admin/pages/{slug}/publish` → publish
+- `DELETE /bff/wiki/admin/pages/{slug}` → delete page (204; cascades to the
+  page's attachments and is audited server-side; WIKI_WRITE)
 - `GET  /bff/wiki/pages/{slug}/attachments` → `AttachmentList` (list, read tier)
 - `GET  /bff/wiki/pages/{slug}/attachments/{filename}` → download the raw bytes (read tier)
 - `POST /bff/wiki/admin/pages/{slug}/attachments` → upload (multipart `file` part; WIKI_WRITE)
@@ -334,7 +336,7 @@ npm run gen:spec   # cp ${WIKI_BFF_SPEC:-../hugmesh-wiki-bff-api/.../openapi.jso
 ```
 
 `wiki.service.ts` **fully delegates to the generated clients** — the content
-feature (`listPages`/`getPage`/`createPage`/`updatePage`/`publishPage`/`auditTrail`),
+feature (`listPages`/`getPage`/`createPage`/`updatePage`/`publishPage`/`deletePage`/`auditTrail`),
 the access overlay (`grant`/`timeout`/`ban`/`revoke`/`listActiveAccess`/`accessHistory`)
 and the per-page attachments panel (`listAttachments`/`uploadAttachment`/
 `deleteAttachment`/`downloadAttachment`) all ride the generated, typed clients
@@ -467,6 +469,12 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   read tier, upload/delete at `WIKI_WRITE`, with the platform's
   disabled+helptext convention for non-writers. (See **BFF endpoints
   consumed** above.)
+- **Shipped — Page delete (`DELETE /bff/wiki/admin/pages/{slug}`):**
+  `wiki.service.ts#deletePage` plus a `WIKI_WRITE`-gated Delete control on the
+  page view. Destructive and cascading (the bff removes the page's attachments
+  too), so the control is two-step: it arms an inline confirmation panel that
+  names the cascade, and only that panel's confirm button calls the bff. There
+  is no browser modal. (See **BFF endpoints consumed** above.)
 - **Shipped — Opaque `bff_` session (no bearer in `localStorage`):**
   `bffToken` and the per-service access tokens are not part of `SnapSession`;
   `/bff/*` calls ride the HttpOnly `bff_` cookie and the gateway exchanges it
@@ -498,13 +506,6 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   (`{[key: string]: {}}` in the generated types) rather than a real
   `AuditDto` — a proper schema needs to land on `hugmesh-wiki-bff-api` first,
   then a regen here picks up the type.
-- **No page-delete UI or client wrapper**: `hugmesh-wiki-bff-api` exposes
-  `DELETE /bff/wiki/admin/pages/{slug}` (ADMIN/SUPERADMIN, cascades to
-  attachments, audited — see `openapi.json`) and the generated
-  `WikiService.wikiDeletePage()` client method exists, but `wiki.service.ts`
-  never wraps it and no component (e.g. the Content list / page view) exposes
-  a delete action. Either wire it up or record the product decision that
-  pages are intentionally undeletable from this console.
 - **No brand picker for the SUPERADMIN cross-brand target**: the target
   brand is a free-text field (see **Access console: the cross-brand
   target**). The wiki-bff exposes no "known brands" endpoint, and the brand
@@ -512,7 +513,9 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   against the bff's trusted `DomainRegistry` and an unknown brand comes back
   as a 400 (surfaced verbatim). A typo is therefore caught, but only after a
   round-trip. Wiring a brand-list endpoint would let the console offer a
-  select instead.
+  select instead — that endpoint has to land on `hugmesh-wiki-bff-api` first
+  (the brand set is the bff's server-side `DomainRegistry`), so it cannot be
+  closed from this repo.
 - **No cursor paging on the audit trail**: the manage view's "Rows to load"
   picker covers the bff's whole `[1, 1000]` `?limit` range, but the endpoint
   offers no cursor/offset, so 1000 newest-first rows is the deepest this

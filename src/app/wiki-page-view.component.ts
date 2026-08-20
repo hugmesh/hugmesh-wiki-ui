@@ -11,12 +11,18 @@ import { WikiAttachmentsComponent } from './wiki-attachments.component';
 /**
  * The page VIEW — GET /bff/wiki/pages/{slug} → WikiDto.Page; renders the
  * bff-rendered content_html (re-sanitized at the browser boundary, defence-in-
- * depth). Read-gated (wikiReadGuard: WIKI_READ). The Edit + Publish controls are
- * shown role-responsively (canWrite = WIKI_WRITE); a MOD reader sees neither.
+ * depth). Read-gated (wikiReadGuard: WIKI_READ). The Edit, Publish and Delete
+ * controls are shown role-responsively (canWrite = WIKI_WRITE); a MOD reader
+ * sees none of them.
+ *
+ * Delete (DELETE /bff/wiki/admin/pages/{slug}) is destructive and cascades to
+ * the page's attachments server-side, so it is TWO-STEP: the button arms an
+ * inline confirmation panel naming the cascade, and only its confirm button
+ * calls the bff. The confirmation is inline markup — never a browser modal.
  *
  * a11y: the page title is the h2; the rendered body is a labelled region; the
- * Publish action announces its result in a role="status" live region and a 403
- * (the bff @PreAuthorize denial) is surfaced in a role="alert".
+ * Publish/Delete actions announce their result in a role="status" live region
+ * and a 403 (the bff @PreAuthorize denial) is surfaced in a role="alert".
  */
 @Component({
   selector: 'hug-wiki-page-view',
@@ -37,8 +43,14 @@ export class WikiPageViewComponent implements OnInit {
   readonly error = signal('');
   readonly publishing = signal(false);
   readonly publishMsg = signal('');
+  /** True once the Delete button has armed the inline confirmation panel. */
+  readonly confirmingDelete = signal(false);
+  readonly deleting = signal(false);
+  /** Set after the bff removed the page — the body is replaced by the ack (the
+   *  page no longer exists, so there is nothing left to re-read). */
+  readonly deleted = signal(false);
 
-  /** WIKI_WRITE gate: show the Edit and Publish controls. */
+  /** WIKI_WRITE gate: show the Edit, Publish and Delete controls. */
   readonly canWrite = this.session.canWrite;
 
   /**
@@ -75,6 +87,8 @@ export class WikiPageViewComponent implements OnInit {
     this.loading.set(true);
     this.error.set('');
     this.publishMsg.set('');
+    this.confirmingDelete.set(false);
+    this.deleted.set(false);
     try {
       this.page.set(await this.wiki.getPage(this.slug()));
     } catch (e) {
@@ -107,25 +121,69 @@ export class WikiPageViewComponent implements OnInit {
     }
   }
 
+  /** Arm the inline delete confirmation. Guarded on WIKI_WRITE (the control is
+   *  not rendered for a non-writer; this keeps a programmatic click honest). */
+  askDelete(): void {
+    if (!this.canWrite() || !this.page()) return;
+    this.publishMsg.set('');
+    this.error.set('');
+    this.confirmingDelete.set(true);
+  }
+
+  /** Dismiss the inline delete confirmation WITHOUT calling the bff. */
+  cancelDelete(): void {
+    this.confirmingDelete.set(false);
+  }
+
+  /**
+   * Delete the current page, once the inline confirmation was accepted.
+   * Calls DELETE /bff/wiki/admin/pages/{slug} (WIKI_WRITE gated); the bff
+   * cascades to the page's attachments and audits the removal.
+   * On success: clears the page and shows the ack + a link back to the list.
+   * On failure: sets `error` (403 = role denied, 404 = already gone).
+   */
+  async remove(): Promise<void> {
+    if (!this.canWrite() || !this.page() || this.deleting()) return;
+    this.deleting.set(true);
+    this.error.set('');
+    try {
+      await this.wiki.deletePage(this.slug());
+      this.confirmingDelete.set(false);
+      this.page.set(null);
+      this.deleted.set(true);
+    } catch (e) {
+      this.error.set(this.message(e, 'delete'));
+    } finally {
+      this.deleting.set(false);
+    }
+  }
+
   /**
    * Map a caught error to a user-friendly message, branching on the HTTP
    * status from the BFF and the action that failed.
    *
    * @param e - The caught value (typically a {@link WikiApiError}).
-   * @param action - `'load'` or `'publish'`, used to pick the right copy.
+   * @param action - `'load'`, `'publish'` or `'delete'`, used to pick the copy.
    * @returns A localized error string for the template.
    */
-  private message(e: unknown, action: 'load' | 'publish'): string {
+  private message(e: unknown, action: 'load' | 'publish' | 'delete'): string {
     if (e instanceof WikiApiError) {
       if (e.isForbidden) {
-        return action === 'publish'
-          ? 'The server denied publish — your role does not permit authoring this page.'
-          : 'You no longer have permission to read this page (the server denied access).';
+        switch (action) {
+          case 'publish':
+            return 'The server denied publish — your role does not permit authoring this page.';
+          case 'delete':
+            return 'The server denied delete — removing a page requires the ADMIN or SUPERADMIN role.';
+          default:
+            return 'You no longer have permission to read this page (the server denied access).';
+        }
       }
       if (e.isNotFound) return 'That wiki page does not exist (it may have been removed).';
     }
-    return action === 'publish'
-      ? 'Could not publish the page. Please try again.'
-      : 'Could not load the page. Please try again.';
+    switch (action) {
+      case 'publish': return 'Could not publish the page. Please try again.';
+      case 'delete': return 'Could not delete the page. Please try again.';
+      default: return 'Could not load the page. Please try again.';
+    }
   }
 }
