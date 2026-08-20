@@ -1,10 +1,10 @@
 # hugmesh-wiki-ui
 
-The **wiki management UI** for the [HugMesh](https://github.com/hugmesh-net)
+The **wiki management UI** for the [HugMesh](https://github.com/hugmesh)
 platform — an Angular **native-federation remote** that the `hugmesh.net`
 host shell mounts at **`/wiki`** and exposes via its navigation menu, gated to
 users who hold the `wiki` role. It is the front-end console for
-[`hugmesh-wiki-bff-api`](https://github.com/hugmesh-net/hugmesh-wiki-bff-api),
+[`hugmesh-wiki-bff-api`](https://github.com/hugmesh/hugmesh-wiki-bff-api),
 covering content authoring and the grant/timeout/ban access-override layer
 that keeps wiki content scoped per brand/domain.
 
@@ -304,7 +304,7 @@ The pipeline has four stages (`stages: [test, e2e, build, pentest]`):
 3. **`build`** — `build:image` builds and pushes the container image, tagged
    with the release tag / git SHA plus a moving branch tag.
 4. **`pentest`** — a centralized OWASP pen-test stage, included from
-   [`hugmesh-generator`](https://github.com/hugmesh-net/hugmesh-generator)'s
+   [`hugmesh-generator`](https://github.com/hugmesh/hugmesh-generator)'s
    shared `pentest-stage.gitlab-ci.yml`. This repo runs `pentest:sca`
    (Dependency-Check SCA) and `pentest:dast` (authenticated ZAP DAST
    baseline); both are `allow_failure: true` so a finding surfaces in the
@@ -313,7 +313,7 @@ The pipeline has four stages (`stages: [test, e2e, build, pentest]`):
 
 A separate, manually-triggered [`.github/workflows/release.yml`](.github/workflows/release.yml)
 (`workflow_dispatch` only) builds this same Dockerfile and publishes it to
-`ghcr.io/hugmesh-net/hugmesh-wiki-ui` for consumers who pull the public image
+`ghcr.io/hugmesh/hugmesh-wiki-ui` for consumers who pull the public image
 rather than build from the GitLab pipeline's internal registry.
 
 ## Platform context
@@ -330,7 +330,7 @@ and role gating run unchanged. Authorization is data-driven by a
 domain, SUPERADMIN cross-domain); the `/wiki = ROLE_WIKI` gate this remote
 sits behind is one such route. Shared account/session/MFA/Casdoor-admin
 infrastructure lives in
-[`hugmesh-auth-core`](https://github.com/hugmesh-net/hugmesh-auth-core),
+[`hugmesh-auth-core`](https://github.com/hugmesh/hugmesh-auth-core),
 consumed by `user-bff` and `admin-bff`.
 
 **What that means for this repo:** the BFF/gateway auth model above is
@@ -413,9 +413,9 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
 
 ## Related HugMesh repositories
 
-- [`hugmesh-wiki-bff-api`](https://github.com/hugmesh-net/hugmesh-wiki-bff-api) — the backend-for-frontend this UI talks to over `/bff/wiki/**`.
-- [`hugmesh-auth-core`](https://github.com/hugmesh-net/hugmesh-auth-core) — shared account/session/MFA/Casdoor-admin infrastructure used by the platform's BFFs.
-- [`hugmesh-generator`](https://github.com/hugmesh-net/hugmesh-generator) — templates and shared CI includes (e.g. the pentest stage this repo's pipeline pulls in).
+- [`hugmesh-wiki-bff-api`](https://github.com/hugmesh/hugmesh-wiki-bff-api) — the backend-for-frontend this UI talks to over `/bff/wiki/**`.
+- [`hugmesh-auth-core`](https://github.com/hugmesh/hugmesh-auth-core) — shared account/session/MFA/Casdoor-admin infrastructure used by the platform's BFFs.
+- [`hugmesh-generator`](https://github.com/hugmesh/hugmesh-generator) — templates and shared CI includes (e.g. the pentest stage this repo's pipeline pulls in).
 
 ## Contributing
 

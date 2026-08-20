@@ -1,6 +1,6 @@
 # Manual release workflow — builds the wiki-ui container image (see Dockerfile)
 # and publishes it to GHCR. Mirrors the `build:image` job in .gitlab-ci.yml, but
-# targets ghcr.io/hugmesh-net instead of the in-cluster GitLab registry.
+# targets ghcr.io/hugmesh instead of the in-cluster GitLab registry.
 #
 # workflow_dispatch ONLY, intentionally: this must stay fully inert until a
 # human enables it later. Do not add `push`/`tags` triggers.
@@ -16,7 +16,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: hugmesh-net/hugmesh-wiki-ui
+  IMAGE_NAME: hugmesh/hugmesh-wiki-ui
 
 jobs:
   build-and-push:

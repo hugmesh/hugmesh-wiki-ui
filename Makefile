@@ -49,6 +49,6 @@ pentest-dast: ## DAST baseline against $DAST_TARGET_URL via the generator harnes
 	else \
 		echo "   harness not found at $(PENTEST_HARNESS)."; \
 		echo "   Clone it, then re-run, e.g.:"; \
-		echo "     git clone https://github.com/hugmesh-net/hugmesh-generator $(GENERATOR_DIR)"; \
+		echo "     git clone https://github.com/hugmesh/hugmesh-generator $(GENERATOR_DIR)"; \
 		echo "     make pentest DAST_TARGET_URL=$(DAST_TARGET_URL) GENERATOR_DIR=$(GENERATOR_DIR)"; \
 	fi
