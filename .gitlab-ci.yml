@@ -9,7 +9,7 @@
 # of truth for the pen-test harness (Dependency-Check SCA + ZAP DAST + probes +
 # nuclei). DEV / CI-PIPELINE ONLY — not a deployed feature.
 include:
-  - project: 'HugMesh/hugmesh-generator'
+  - project: 'hugmesh/hugmesh-generator'
     ref: main
     file: '/tests/pentest/ci/pentest-stage.gitlab-ci.yml'
 
