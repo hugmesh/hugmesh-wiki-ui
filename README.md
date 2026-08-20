@@ -155,7 +155,8 @@ ng-openapi-gen clients (see **Typed API client** below). Auth rides the
 - `DELETE /bff/wiki/admin/access/{read|banned}/{userSubject}` → revoke/restore
 - `GET  /bff/wiki/superadmin/access` → all active overrides
 - `GET  /bff/wiki/superadmin/access/{userSubject}/history` → full history
-- `GET  /bff/wiki/superadmin/audit` → content audit trail
+- `GET  /bff/wiki/superadmin/audit[?limit=N]` → content audit trail (newest
+  first; `limit` bounded to `[1, 1000]`, default 200)
 
 Every `/bff/*` call is sent with credentials (`withCredentials: true`, set by
 `auth.interceptor.ts`) and the gateway's `BffCookieToBearerWebFilter` mints the
@@ -247,7 +248,9 @@ Two fields worth knowing about on the wiki-bff spec:
 
 - an optional `limit` query param on `GET .../superadmin/audit` (bounded to
   `[1, 1000]`, defaults to 200, so the audit read is never an unbounded table
-  scan) — not yet surfaced in the UI, see **Known Gaps / TODO**;
+  scan) — surfaced in the manage view as the audit trail's "Rows to load"
+  picker (`auditTrail(limit?)`; an omitted limit sends no query param and so
+  takes the bff's own default);
 - an optional `targetDomain` field on the `grant`/`ban`/`timeout` request
   bodies, letting a SUPERADMIN name the victim's brand on a cross-brand write
   — wired through to the access console (see **Access console: the
@@ -406,10 +409,11 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   as a 400 (surfaced verbatim). A typo is therefore caught, but only after a
   round-trip. Wiring a brand-list endpoint would let the console offer a
   select instead.
-- **No UI for the audit trail's `limit` query param**: `auditTrail()` always
-  calls the bff with no `limit`, so it gets the server default (200, newest
-  first) — fine for now, but there is no way to page further back from this
-  console if the SUPERADMIN audit view ever needs more than 200 rows.
+- **No cursor paging on the audit trail**: the manage view's "Rows to load"
+  picker covers the bff's whole `[1, 1000]` `?limit` range, but the endpoint
+  offers no cursor/offset, so 1000 newest-first rows is the deepest this
+  console can reach. Paging further back needs a cursor parameter on
+  `hugmesh-wiki-bff-api` first.
 
 ## Related HugMesh repositories
 

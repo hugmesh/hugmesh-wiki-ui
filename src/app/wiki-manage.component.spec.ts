@@ -43,6 +43,23 @@ describe('WikiManageComponent (superadmin manage view)', () => {
     expect(el().querySelector('[data-testid="wiki-manage-audit"]')).not.toBeNull();
   });
 
+  it('reads the audit trail at the bff default (200) and re-reads at the picked limit', async () => {
+    await render();
+    expect(wiki.auditTrail).toHaveBeenCalledWith(200);
+
+    const select = el().querySelector<HTMLSelectElement>('[data-testid="wiki-manage-audit-limit"]')!;
+    expect(select.getAttribute('aria-describedby')).toBe('wiki-audit-limit-help');
+    expect(select.options.length).toBe(fixture.componentInstance.auditLimits.length);
+
+    // Pick the last stop (1000 — the bff's ceiling) through the real control.
+    select.selectedIndex = select.options.length - 1;
+    select.dispatchEvent(new Event('change'));
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.auditLimit()).toBe(1000);
+    expect(wiki.auditTrail).toHaveBeenCalledWith(1000);
+  });
+
   it('looks up a principal history on demand', async () => {
     await render();
     wiki.accessHistory.and.resolveTo({ access: [access({ state: 'revoked', revokedAt: '2026-06-13T01:00:00Z' })] });
