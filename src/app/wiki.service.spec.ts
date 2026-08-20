@@ -122,6 +122,29 @@ describe('WikiService — content (delegates to the generated client over HttpCl
     expect(res.state).toBe('published');
   });
 
+  it('deletePage → DELETE /bff/wiki/admin/pages/{slug} (204, no body)', async () => {
+    const promise = service.deletePage('s');
+    const req = httpMock.expectOne('/bff/wiki/admin/pages/s');
+    expect(req.request.method).toBe('DELETE');
+    expect(req.request.withCredentials).toBeTrue();
+    expect(req.request.headers.has('Authorization')).toBeFalse();
+    req.flush(null, { status: 204, statusText: 'No Content' });
+    await promise;
+  });
+
+  it('deletePage surfaces a 404 (slug already gone) as WikiApiError.isNotFound', async () => {
+    const promise = service.deletePage('gone');
+    const req = httpMock.expectOne('/bff/wiki/admin/pages/gone');
+    req.flush({ message: 'not found' }, { status: 404, statusText: 'Not Found' });
+    try {
+      await promise;
+      fail('expected rejection');
+    } catch (e) {
+      expect(e instanceof WikiApiError).toBeTrue();
+      expect((e as WikiApiError).isNotFound).toBeTrue();
+    }
+  });
+
   it('surfaces a 403 as WikiApiError.isForbidden (the bff @PreAuthorize denial)', async () => {
     const promise = service.listPages();
     const req = httpMock.expectOne('/bff/wiki/pages');
