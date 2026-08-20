@@ -280,12 +280,22 @@ describe('WikiService — access/audit overlay (delegates to the generated clien
     await history;
   });
 
-  it('auditTrail → GET /bff/wiki/superadmin/audit', async () => {
+  it('auditTrail → GET /bff/wiki/superadmin/audit (no ?limit ⇒ the bff default)', async () => {
     const promise = service.auditTrail();
+    // Exact-URL match: an omitted limit must send NO query param at all.
     const req = httpMock.expectOne('/bff/wiki/superadmin/audit');
     expect(req.request.method).toBe('GET');
     req.flush({ actions: [{ a: 1 }] });
     expect((await promise).actions.length).toBe(1);
+  });
+
+  it('auditTrail(limit) → GET /bff/wiki/superadmin/audit?limit=… (the bff re-clamps to [1, 1000])', async () => {
+    const promise = service.auditTrail(500);
+    const req = httpMock.expectOne('/bff/wiki/superadmin/audit?limit=500');
+    expect(req.request.method).toBe('GET');
+    expect(req.request.params.get('limit')).toBe('500');
+    req.flush({ actions: [] });
+    await promise;
   });
 
   it('surfaces a 403 as WikiApiError.isForbidden (the bff @PreAuthorize denial)', async () => {
