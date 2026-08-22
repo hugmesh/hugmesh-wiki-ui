@@ -217,10 +217,16 @@ endpoint):
 These are re-declared inside the `location /` and `/healthz` blocks alongside
 the federation `Access-Control-Allow-Origin: *` header, because nginx drops
 server-scope `add_header` directives in any location that declares its own.
-Stricter policies (CSP, COEP/CORP, Permissions-Policy) are deliberately
-deferred for now — they need per-UI tuning (federation remotes, BFF
-`connect-src`) plus validation against a real deployment before they can be
-turned on safely.
+A nonce-based **Content-Security-Policy** now ships in `nginx.conf`: the
+`map $request_id $cspnonce` block mints one nonce per request, a `sub_filter`
+stamps it onto every `<script`, and the header re-declares it —
+`script-src 'self' 'nonce-$cspnonce' blob:`, with `object-src 'none'` and
+`frame-ancestors 'none'`. It is per-request nonced rather than static because
+the gateway's fallback CSP blanks the SPA otherwise.
+
+COEP/CORP and Permissions-Policy are still deliberately deferred — they need
+per-UI tuning (federation remotes, BFF `connect-src`) plus validation against a
+real deployment before they can be turned on safely.
 
 ## Runtime configuration
 
