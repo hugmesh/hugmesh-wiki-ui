@@ -7,3 +7,4 @@
 .env
 /test-results
 /coverage
+/.e2e-credentials

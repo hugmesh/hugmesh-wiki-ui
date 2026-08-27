@@ -315,15 +315,20 @@ Developer/CI only — none of these reach a deployed container.
 | `DAST_TARGET_URL` | unset | `make pentest` DAST baseline target; unset skips DAST cleanly |
 | `GENERATOR_DIR` | `../hugmesh-generator` | Where `make pentest` looks for the shared DAST harness |
 | `E2E_BASE_URL` | `https://host.docker.internal:8443` | Origin the Playwright/BDD harness drives |
-| `E2E_PASSWORD` | `e2e-pass` | Fallback seed-user password |
+| `E2E_PASSWORD` | — | Shared seed-user password override |
 | `E2E_*_PASSWORD` | — | Per-role seed-user overrides |
+| `E2E_CREDENTIALS_FILE` | nearest `.e2e-credentials` walking up from cwd | Run-state credentials file `make stack-seed` (hugmesh-generator) writes |
 
 The per-role e2e overrides are `E2E_SUPERADMIN_PASSWORD`,
 `E2E_ADMIN_A_PASSWORD`, `E2E_ADMIN_B_PASSWORD`, `E2E_MOD_WIKI_PASSWORD`,
 `E2E_MOD_PASSWORD`, `E2E_USER_PASSWORD` and `E2E_READER_B_PASSWORD` (see
 `e2e/tests/helpers/roles.ts` and [`e2e/README.md`](e2e/README.md)). They are
 credentials: export them in the shell or the CI secret store, never in a
-committed file. GitLab's own `CI_*` variables, and the `HOST_UID`/`HOST_GID`
+committed file. None of them is required: `passwordFor()` resolves the per-role
+override, then `E2E_PASSWORD`, then the run-state `.e2e-credentials` file that
+hugmesh-generator's `make stack-seed` generates — and throws, naming that
+target, when nothing resolves. There is no built-in literal password. GitLab's
+own `CI_*` variables, and the `HOST_UID`/`HOST_GID`
 the `test` job computes from `id -u`/`id -g`, are set by the pipeline itself
 and are not knobs.
 
