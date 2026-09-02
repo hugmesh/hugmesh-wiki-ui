@@ -9,6 +9,7 @@ import { BaseService } from '../base-service';
 import { ApiConfiguration } from '../api-configuration';
 import { StrictHttpResponse } from '../strict-http-response';
 
+import { AuditList } from '../models/audit-list';
 import { Page } from '../models/page';
 import { PageList } from '../models/page-list';
 import { wikiAuditTrail } from '../fn/wiki/wiki-audit-trail';
@@ -193,10 +194,7 @@ export class WikiService extends BaseService {
    *
    * This method doesn't expect any request body.
    */
-  wikiAuditTrail$Response(params?: WikiAuditTrail$Params, context?: HttpContext): Promise<StrictHttpResponse<{
-[key: string]: {
-};
-}>> {
+  wikiAuditTrail$Response(params?: WikiAuditTrail$Params, context?: HttpContext): Promise<StrictHttpResponse<AuditList>> {
     const obs = wikiAuditTrail(this.http, this.rootUrl, params, context);
     return firstValueFrom(obs);
   }
@@ -211,18 +209,9 @@ export class WikiService extends BaseService {
    *
    * This method doesn't expect any request body.
    */
-  wikiAuditTrail(params?: WikiAuditTrail$Params, context?: HttpContext): Promise<{
-[key: string]: {
-};
-}> {
+  wikiAuditTrail(params?: WikiAuditTrail$Params, context?: HttpContext): Promise<AuditList> {
     const resp = this.wikiAuditTrail$Response(params, context);
-    return resp.then((r: StrictHttpResponse<{
-[key: string]: {
-};
-}>): {
-[key: string]: {
-};
-} => r.body);
+    return resp.then((r: StrictHttpResponse<AuditList>): AuditList => r.body);
   }
 
   /** Path part for operation `wikiListPages()` */

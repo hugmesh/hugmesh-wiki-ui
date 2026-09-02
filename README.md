@@ -356,13 +356,28 @@ over Angular `HttpClient`, with the HttpOnly `bff_` cookie attached by
 The public method signatures and the `WikiApiError` (409/403/404) contract
 stay stable across regenerations.
 
+`auditTrail()` is typed the whole way down: the wiki-bff declares a real
+`AuditList`/`AuditEntry` response schema, so the generated model is
+re-exported here as `AuditTrail`/`WikiAuditEntry` and the wrapper does **no**
+cast at all. The manage view's audit table therefore renders a fixed, labelled
+column set (`When`/`Actor`/`Action`/`Target`/`Brand`/`Detail`) keyed on
+`keyof WikiAuditEntry`, instead of discovering columns from
+`Object.keys(row)` — a bff-side rename is now a build failure here rather than
+a silently missing column. (It previously returned
+`{ actions: Array<Record<string, unknown>> }`, because the endpoint returned
+an untyped `Map<String,Object>` that springdoc rendered as an open object.)
+
 Two fields worth knowing about on the wiki-bff spec:
 
 - an optional `limit` query param on `GET .../superadmin/audit` (bounded to
   `[1, 1000]`, defaults to 200, so the audit read is never an unbounded table
   scan) — surfaced in the manage view as the audit trail's "Rows to load"
   picker (`auditTrail(limit?)`; an omitted limit sends no query param and so
-  takes the bff's own default);
+  takes the bff's own default). The picker validates before it fetches: a
+  value outside `[1, 1000]` is clamped to the nearest end with an inline
+  message, a non-integer is refused outright (no request at all), and
+  re-picking the loaded size is a no-op — the bff re-clamps regardless, so
+  this only saves a round-trip, it is never the real bound;
 - an optional `targetDomain` field on the `grant`/`ban`/`timeout` request
   bodies, letting a SUPERADMIN name the victim's brand on a cross-brand write
   — wired through to the access console (see **Access console: the
@@ -510,13 +525,6 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   available and unset everywhere; the same-origin default is what actually
   runs. Wiring the hook (or a host-side assignment) is the follow-up if a
   deployment ever needs the wiki BFF on another origin.
-- `src/app/wiki.service.ts` (`auditTrail`) returns an untyped
-  `{ actions: Array<Record<string, unknown>> }`: `GET /bff/wiki/superadmin/audit`
-  **is** in the committed `openapi.json` and already delegates to the
-  generated client, but its response schema is a generic open object
-  (`{[key: string]: {}}` in the generated types) rather than a real
-  `AuditDto` — a proper schema needs to land on `hugmesh-wiki-bff-api` first,
-  then a regen here picks up the type.
 - **No brand picker for the SUPERADMIN cross-brand target**: the target
   brand is a free-text field (see **Access console: the cross-brand
   target**). The wiki-bff exposes no "known brands" endpoint, and the brand
