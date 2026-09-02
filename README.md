@@ -133,6 +133,20 @@ message is surfaced verbatim (it names the field to fix). The applied result
 echoes the brand the row actually landed in, so a cross-brand write can be
 confirmed rather than assumed.
 
+**The field is a combobox, not free text — and not a `<select>` either.** The
+BFF serves no known-brands endpoint, so the console cannot enumerate the
+registry. What it *can* do is observe: the two SUPERADMIN cross-domain reads it
+already makes (`GET /bff/wiki/superadmin/access` and
+`GET /bff/wiki/superadmin/audit`) each carry the row's server-stamped `domain`.
+`WikiService#observedBrands` unions those into the datalist behind the field, so
+a brand that has any access override or any recent content edit is one click
+away instead of one typo away. That union is a **subset** of the registry — a
+brand with neither is invisible to it — so the input stays typeable and the
+BFF's 400 remains the authority. `observedBrands` deliberately never rejects:
+if either read is denied or fails, the operator simply gets fewer suggestions
+(or none) rather than an error they cannot act on. An authoritative list needs
+the BFF-side endpoint (hugmesh-wiki-bff-api issue #12).
+
 ## BFF endpoints consumed (`/bff/wiki/**`)
 
 `src/app/wiki.service.ts` is the typed data-access wrapper. Each public method
@@ -481,11 +495,14 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   disabled+helptext convention for non-writers. (See **BFF endpoints
   consumed** above.)
 - **Shipped — Page delete (`DELETE /bff/wiki/admin/pages/{slug}`):**
-  `wiki.service.ts#deletePage` plus a `WIKI_WRITE`-gated Delete control on the
-  page view. Destructive and cascading (the bff removes the page's attachments
-  too), so the control is two-step: it arms an inline confirmation panel that
-  names the cascade, and only that panel's confirm button calls the bff. There
-  is no browser modal. (See **BFF endpoints consumed** above.)
+  `wiki.service.ts#deletePage` plus a `WIKI_WRITE`-gated Delete control on
+  **both** the page view and each row of the content list. Destructive and
+  cascading (the bff removes the page's attachments too), so the control is
+  two-step in both places: it arms an inline confirmation that names the
+  cascade, and only that confirmation's own button calls the bff. There is no
+  browser modal. In the list only one row can be armed at a time, and a failed
+  delete leaves the row in place rather than faking it away. (See **BFF
+  endpoints consumed** above.)
 - **Shipped — Opaque `bff_` session (no bearer in `localStorage`):**
   `bffToken` and the per-service access tokens are not part of `SnapSession`;
   `/bff/*` calls ride the HttpOnly `bff_` cookie and the gateway exchanges it
@@ -517,16 +534,18 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   (`{[key: string]: {}}` in the generated types) rather than a real
   `AuditDto` — a proper schema needs to land on `hugmesh-wiki-bff-api` first,
   then a regen here picks up the type.
-- **No brand picker for the SUPERADMIN cross-brand target**: the target
-  brand is a free-text field (see **Access console: the cross-brand
-  target**). The wiki-bff exposes no "known brands" endpoint, and the brand
-  list is not derivable client-side, so the value is validated server-side
-  against the bff's trusted `DomainRegistry` and an unknown brand comes back
-  as a 400 (surfaced verbatim). A typo is therefore caught, but only after a
-  round-trip. Wiring a brand-list endpoint would let the console offer a
-  select instead — that endpoint has to land on `hugmesh-wiki-bff-api` first
-  (the brand set is the bff's server-side `DomainRegistry`), so it cannot be
-  closed from this repo.
+- **The brand picker's list is OBSERVED, not authoritative**: the target-brand
+  control is now a combobox with suggestions (see **Access console: the
+  cross-brand target**), but the wiki-bff still exposes no "known brands"
+  endpoint, so the suggestions are derived from the brands this console can
+  see — a strict subset of the bff's `DomainRegistry`. A brand with no access
+  override and no entry in the bounded audit page is therefore not suggested,
+  which is exactly why the field stays typeable rather than becoming a closed
+  `<select>`, and why the bff's 400 on an unknown brand remains the real gate.
+  Closing this needs a brand-list endpoint on `hugmesh-wiki-bff-api` (the
+  authoritative set is its server-side `DomainRegistry`, which already has
+  `knownDomains()`); it cannot be closed from this repo. Tracked in
+  hugmesh-wiki-bff-api issue #12.
 - **No cursor paging on the audit trail**: the manage view's "Rows to load"
   picker covers the bff's whole `[1, 1000]` `?limit` range, but the endpoint
   offers no cursor/offset, so 1000 newest-first rows is the deepest this

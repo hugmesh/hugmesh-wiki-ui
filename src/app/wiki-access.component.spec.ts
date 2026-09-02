@@ -22,7 +22,11 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
 
   beforeEach(async () => {
     canManage.set(false);
-    wiki = jasmine.createSpyObj<WikiService>('WikiService', ['grant', 'timeout', 'ban', 'revoke']);
+    wiki = jasmine.createSpyObj<WikiService>('WikiService', ['grant', 'timeout', 'ban', 'revoke', 'observedBrands']);
+    // The brand suggestions are a convenience the field works without; default the
+    // double to "nothing observed" so every pre-existing spec keeps exercising the
+    // free-text path exactly as before.
+    wiki.observedBrands.and.resolveTo([]);
     await TestBed.configureTestingModule({
       imports: [WikiAccessComponent],
       providers: [
@@ -205,6 +209,80 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
       fixture.detectChanges();
       expect(el().querySelector('[data-testid="wiki-access-error"]')!.textContent)
         .toContain('must target a known brand');
+    });
+  });
+
+  // ── brand PICKER (issue #3 item 2) ──
+  //
+  // The bff serves no known-brands endpoint, so the suggestions are OBSERVED
+  // (WikiService.observedBrands unions the two SUPERADMIN cross-domain reads).
+  // That is a subset of the server's registry, which is exactly why this is a
+  // datalist combobox and not a <select>: an unobserved brand must stay typeable,
+  // and the bff's 400 stays the real gate.
+  describe('target-brand picker', () => {
+    /** Re-create the fixture with canManage already true, so ngOnInit sees the
+     *  SUPERADMIN role (the beforeEach above renders as a scoped ADMIN). */
+    async function renderAsSuperadmin(): Promise<void> {
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    it('does NOT read the brand sources for a scoped ADMIN (they would 403)', () => {
+      expect(wiki.observedBrands)
+        .withContext('the field is not even rendered for an admin')
+        .not.toHaveBeenCalled();
+    });
+
+    it('loads the observed brands for a SUPERADMIN and offers them as datalist options', async () => {
+      wiki.observedBrands.and.resolveTo(['branda', 'brandx']);
+      await renderAsSuperadmin();
+      expect(wiki.observedBrands).toHaveBeenCalled();
+      const opts = Array.from(
+        el().querySelectorAll('[data-testid="wiki-access-brand-options"] option'),
+      ).map((o) => (o as HTMLOptionElement).value);
+      expect(opts).toEqual(['branda', 'brandx']);
+    });
+
+    it('binds the input to that datalist so it is a combobox, not free text', async () => {
+      wiki.observedBrands.and.resolveTo(['brandx']);
+      await renderAsSuperadmin();
+      const input = el().querySelector('[data-testid="wiki-access-target-domain"]')!;
+      expect(input.getAttribute('list')).toBe('wiki-access-brand-options');
+    });
+
+    it('keeps the field TYPEABLE — a brand that was never observed still submits', async () => {
+      wiki.observedBrands.and.resolveTo(['branda']);
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      c.targetDomain.set('brand-never-seen');
+      wiki.grant.and.resolveTo(access({ domain: 'brand-never-seen' }));
+      await c.submit();
+      expect(wiki.grant).toHaveBeenCalledWith({
+        userSubject: 'u', reason: undefined, targetDomain: 'brand-never-seen',
+      });
+    });
+
+    it('says the list is incomplete rather than implying it is the whole registry', async () => {
+      wiki.observedBrands.and.resolveTo(['branda', 'brandx']);
+      await renderAsSuperadmin();
+      const hint = el().querySelector('[data-testid="wiki-access-brands-hint"]')!;
+      expect(hint).not.toBeNull();
+      expect(hint.textContent).toContain('2 brand');
+      expect(hint.textContent).toContain('will not be listed');
+    });
+
+    it('degrades to a usable free-text field when nothing is observed', async () => {
+      wiki.observedBrands.and.resolveTo([]);
+      await renderAsSuperadmin();
+      expect(el().querySelector('[data-testid="wiki-access-brands-none"]')).not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]')).not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-error"]'))
+        .withContext('absent suggestions are not an error the operator can act on')
+        .toBeNull();
     });
   });
 });

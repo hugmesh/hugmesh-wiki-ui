@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
@@ -30,9 +30,12 @@ type AccessAction = 'grant' | 'timeout' | 'ban';
  * PR #39). The field is therefore rendered ONLY for a SUPERADMIN, and sent only when
  * filled: left blank it reproduces the previous behaviour exactly (fine on a
  * single-issuer cluster, where the bff ignores the field and keeps `default`).
- * The brand list is NOT knowable client-side — the bff validates the value against its
- * trusted DomainRegistry and a 400 is surfaced verbatim, so an unknown brand is caught
- * server-side rather than guessed at here.
+ * The field is a COMBOBOX, not free text: it offers the brands this console can observe
+ * (see {@link brandOptions}) while still accepting a typed value. It cannot be a closed
+ * select — the bff serves no known-brands endpoint, so the suggestions are a SUBSET of its
+ * trusted DomainRegistry and a brand with no observable row would otherwise be untypeable.
+ * The bff therefore stays the authority: it validates the value against the registry and a
+ * 400 is surfaced verbatim, so an unknown brand is still caught server-side.
  *
  * a11y: a labelled fieldset for the action form; each control has a <label> +
  * aria-describedby help; the result/error is announced (role="status"/"alert");
@@ -47,7 +50,7 @@ type AccessAction = 'grant' | 'timeout' | 'ban';
   templateUrl: './wiki-access.component.html',
   styleUrl: './wiki-access.component.scss',
 })
-export class WikiAccessComponent {
+export class WikiAccessComponent implements OnInit {
   private readonly wiki = inject(WikiService);
   private readonly session = inject(SessionService);
 
@@ -66,6 +69,15 @@ export class WikiAccessComponent {
    *  authoritative and ignores the field for a scoped ADMIN regardless). */
   readonly showTargetDomain = this.session.canManage;
 
+  /** Brand suggestions for the target-brand combobox — the brands observable from
+   *  the SUPERADMIN cross-domain reads (WikiService.observedBrands). A SUBSET of the
+   *  bff's DomainRegistry, so the control stays typeable; empty is a valid state
+   *  (nothing observed yet, or the reads were denied) and is NOT an error. */
+  readonly brandOptions = signal<readonly string[]>([]);
+
+  /** True while the suggestion reads are in flight (the field stays usable). */
+  readonly brandsLoading = signal(false);
+
   readonly busy = signal(false);
   readonly error = signal('');
   readonly result = signal<WikiAccess | null>(null);
@@ -77,6 +89,31 @@ export class WikiAccessComponent {
     { value: 'timeout', label: 'Time out', help: 'Block a user from wiki read for a bounded window; access auto-restores when it expires.' },
     { value: 'ban', label: 'Ban', help: 'Permanently block a user from wiki read. A ban takes precedence over any grant or role.' },
   ];
+
+  /**
+   * Load the target-brand suggestions — ONLY for a SUPERADMIN, the only role the
+   * field is rendered for and the only role the cross-domain source reads admit.
+   * A scoped ADMIN never fires them (they would 403, and the field is inert for
+   * them anyway).
+   */
+  ngOnInit(): void {
+    if (this.showTargetDomain()) void this.loadBrands();
+  }
+
+  /**
+   * Fetch the observable brands for the combobox datalist.
+   * Never surfaces an error: {@link WikiService.observedBrands} resolves to an
+   * empty list rather than rejecting, and the field is fully usable as free text
+   * with no suggestions at all.
+   */
+  async loadBrands(): Promise<void> {
+    this.brandsLoading.set(true);
+    try {
+      this.brandOptions.set(await this.wiki.observedBrands());
+    } finally {
+      this.brandsLoading.set(false);
+    }
+  }
 
   /**
    * Switch the active action tab and reset the result/error state so previous

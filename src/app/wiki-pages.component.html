@@ -46,10 +46,65 @@
                   [attr.data-testid]="'wiki-edit-' + p.slug"
                   [attr.aria-label]="'Edit the wiki page ' + p.title"
                 >Edit</a>
+
+                <!-- Delete = WIKI_WRITE and DESTRUCTIVE (the bff cascades to this
+                     page's attachments), so this button only ARMS the inline
+                     confirmation below — the bff call is its confirm button. -->
+                <button
+                  type="button"
+                  class="wiki-btn wiki-btn--danger wiki-page-row__delete"
+                  (click)="askDelete(p.slug)"
+                  [disabled]="deletingSlug() !== null"
+                  [attr.data-testid]="'wiki-delete-' + p.slug"
+                  [attr.aria-label]="'Delete the wiki page ' + p.title"
+                  aria-describedby="wiki-delete-help"
+                >Delete</button>
+              }
+
+              @if (confirmingSlug() === p.slug) {
+                <section
+                  class="wiki-page-row__confirm wiki-panel"
+                  [attr.aria-label]="'Confirm deleting ' + p.title"
+                  [attr.data-testid]="'wiki-delete-confirm-' + p.slug"
+                >
+                  <p class="wiki-warning" role="alert">
+                    <code>{{ p.slug }}</code> and every attachment on it will be removed.
+                    This cannot be undone.
+                  </p>
+                  <div class="wiki-page-row__confirm-actions">
+                    <button
+                      type="button"
+                      class="wiki-btn wiki-btn--danger"
+                      (click)="remove(p.slug)"
+                      [disabled]="deletingSlug() !== null"
+                      [attr.data-testid]="'wiki-delete-yes-' + p.slug"
+                      [attr.aria-label]="'Confirm deleting the wiki page ' + p.title"
+                    >{{ deletingSlug() === p.slug ? 'Deleting…' : 'Delete permanently' }}</button>
+                    <button
+                      type="button"
+                      class="wiki-btn wiki-btn--secondary"
+                      (click)="cancelDelete()"
+                      [disabled]="deletingSlug() !== null"
+                      [attr.data-testid]="'wiki-delete-cancel-' + p.slug"
+                    >Cancel</button>
+                  </div>
+                </section>
               }
             </li>
           }
         </ul>
+        @if (canWrite()) {
+          <span class="sr" id="wiki-delete-help">
+            Permanently remove this page and its attachments. You are asked to confirm first.
+          </span>
+        }
+      }
+
+      @if (notice()) {
+        <p class="wiki-success" role="status" data-testid="wiki-pages-notice">{{ notice() }}</p>
+      }
+      @if (actionError()) {
+        <p class="wiki-error" role="alert" data-testid="wiki-pages-action-error">{{ actionError() }}</p>
       }
     </section>
   }

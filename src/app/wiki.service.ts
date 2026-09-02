@@ -418,4 +418,52 @@ export class WikiService {
     );
     return body as unknown as { actions: Array<Record<string, unknown>> };
   }
+
+  // ----- BRAND SUGGESTIONS (WIKI_MANAGE = SUPERADMIN) ---------------------
+  //
+  // The wiki-bff exposes NO known-brands endpoint: the authoritative list lives
+  // in its DomainRegistry (issuer -> brand, seeded from app.tenancy.issuers) and
+  // is never served. Until it is (hugmesh-wiki-bff-api issue #12), the closest
+  // honest source is OBSERVATION: the two SUPERADMIN cross-domain reads this
+  // console already makes both stamp the row's server-derived `domain`.
+  //
+  //   GET /bff/wiki/superadmin/access          -> every brand's ACTIVE overrides
+  //   GET /bff/wiki/superadmin/audit           -> every brand's content-edit trail
+  //
+  // That union is a SUBSET, never the registry: a brand with no override row and
+  // no audit entry inside the bounded newest-first audit page is invisible here.
+  // So this feeds a SUGGESTION list (a datalist combobox), never a closed select —
+  // the operator must still be able to type a brand this has not seen, and the
+  // bff stays the authority (it 400s an unknown brand, surfaced verbatim).
+
+  /**
+   * The brands this console can OBSERVE, for the SUPERADMIN target-brand
+   * suggestions. Reads the two cross-domain SUPERADMIN surfaces in parallel and
+   * unions their server-stamped `domain` values.
+   *
+   * Deliberately NEVER throws: the suggestions are a convenience over a field
+   * that works as free text without them, so a 403 (not a SUPERADMIN) or a
+   * transient failure on either read degrades to fewer suggestions — or none —
+   * rather than an error the operator cannot act on.
+   *
+   * @returns The sorted, de-duplicated, non-blank brand names observed. A
+   *   SUBSET of the bff's registry, never the whole of it.
+   */
+  async observedBrands(): Promise<string[]> {
+    const [access, audit] = await Promise.allSettled([
+      this.listActiveAccess(),
+      this.auditTrail(),
+    ]);
+    const seen = new Set<string>();
+    const add = (v: unknown): void => {
+      if (typeof v === 'string' && v.trim().length > 0) seen.add(v.trim());
+    };
+    if (access.status === 'fulfilled') {
+      for (const row of access.value.access ?? []) add(row.domain);
+    }
+    if (audit.status === 'fulfilled') {
+      for (const row of audit.value.actions ?? []) add(row['domain']);
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  }
 }
