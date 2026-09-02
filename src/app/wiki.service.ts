@@ -409,6 +409,12 @@ export class WikiService {
   /** GET /bff/wiki/superadmin/audit → { actions:[...] } — the wiki_audit_log
    *  content-edit trail. The shape is bff-defined (a list of audit rows); we
    *  surface it untyped (Record) since the audit DTO is not on the typed boundary.
+   *  It is the ONE list endpoint on this bff with no schema — `/pages` publishes
+   *  PageList and `/superadmin/access` publishes AccessList, but this one's 200 is
+   *  described only as a bare object, so ng-openapi-gen can emit no row type.
+   *  Filed as hugmesh-wiki-bff-api issue #13; when it lands, regenerate and drop
+   *  this cast (and the `row['domain']` index in {@link observedBrands}) for the
+   *  generated type.
    *  `limit` is the optional page size the bff clamps to [1, 1000]; leave it
    *  unset to take the server default (200, newest first) — an omitted limit
    *  sends no query param at all, exactly as before. */
@@ -462,6 +468,11 @@ export class WikiService {
       for (const row of access.value.access ?? []) add(row.domain);
     }
     if (audit.status === 'fulfilled') {
+      // A string index, not a typed field: the audit 200 has no published schema
+      // (hugmesh-wiki-bff-api#13). `domain` IS real and server-stamped —
+      // WikiAuditLog declares @Column("domain") — but the contract does not say
+      // so, so `add` treats a missing/renamed value as "no suggestion" rather
+      // than trusting it.
       for (const row of audit.value.actions ?? []) add(row['domain']);
     }
     return [...seen].sort((a, b) => a.localeCompare(b));
