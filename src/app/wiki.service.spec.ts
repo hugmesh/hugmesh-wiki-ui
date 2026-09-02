@@ -9,9 +9,24 @@ import {
   PageList,
   WikiPage,
   WikiAccess,
+  WikiAuditEntry,
 } from './wiki.service';
 import { authInterceptor } from './auth.interceptor';
 import { SessionService, SnapSession } from './session.service';
+
+/** One typed audit row as the bff emits it (WikiDto.AuditEntry). */
+function auditRow(over: Partial<WikiAuditEntry> = {}): WikiAuditEntry {
+  return {
+    id: 'a-1',
+    domain: 'brandx',
+    actorSubject: 'actor-1',
+    action: 'wiki.page.create',
+    target: 'home',
+    detail: 'v1',
+    createdAt: '2026-08-20T10:15:30Z',
+    ...over,
+  };
+}
 
 function adminSession(): SnapSession {
   return {
@@ -285,8 +300,8 @@ describe('WikiService — access/audit overlay (delegates to the generated clien
     // Exact-URL match: an omitted limit must send NO query param at all.
     const req = httpMock.expectOne('/bff/wiki/superadmin/audit');
     expect(req.request.method).toBe('GET');
-    req.flush({ actions: [{ a: 1 }] });
-    expect((await promise).actions.length).toBe(1);
+    req.flush({ actions: [auditRow()] });
+    expect((await promise).actions?.length).toBe(1);
   });
 
   it('auditTrail(limit) → GET /bff/wiki/superadmin/audit?limit=… (the bff re-clamps to [1, 1000])', async () => {
@@ -296,6 +311,46 @@ describe('WikiService — access/audit overlay (delegates to the generated clien
     expect(req.request.params.get('limit')).toBe('500');
     req.flush({ actions: [] });
     await promise;
+  });
+
+  // ── the TYPED parse (wiki-ui#2) ──────────────────────────────────────
+  //
+  // The bff used to return an untyped Map<String,Object>, springdoc rendered it
+  // as an open object, and the generated client typed it `{[key: string]: {}}` —
+  // so this wrapper cast the body to Record<string, unknown> and every consumer
+  // was on its own. With the real AuditList/AuditEntry schema on the bff the
+  // wrapper returns the GENERATED model and does no cast at all.
+
+  it('auditTrail parses the response into the typed AuditList (every AuditEntry field carried)', async () => {
+    const promise = service.auditTrail(50);
+    const req = httpMock.expectOne('/bff/wiki/superadmin/audit?limit=50');
+    req.flush({
+      actions: [
+        auditRow(),
+        // `detail` is nullable in wiki_audit_log — the bff sends a literal null,
+        // which the OpenAPI schema (no `nullable`) cannot express, so flush the
+        // real wire value rather than the model's optional-string stand-in.
+        { ...auditRow({ id: 'a-2', action: 'wiki.page.update', target: 'faq' }), detail: null },
+      ],
+    });
+
+    const body = await promise;
+    const rows: WikiAuditEntry[] = body.actions ?? [];
+    expect(rows.length).toBe(2);
+    // Field-for-field: a schema that renamed or dropped a column would fail here
+    // AND would have failed to compile, which is the whole point of typing it.
+    expect(rows[0]).toEqual(auditRow());
+    expect(rows[0].createdAt).toBe('2026-08-20T10:15:30Z');
+    expect(rows[0].actorSubject).toBe('actor-1');
+    // `detail` is the nullable column — it must survive as null/undefined, not
+    // throw and not be substituted.
+    expect(rows[1].detail == null).toBeTrue();
+  });
+
+  it('auditTrail tolerates a body with no actions key (the generated model marks it optional)', async () => {
+    const promise = service.auditTrail();
+    httpMock.expectOne('/bff/wiki/superadmin/audit').flush({});
+    expect((await promise).actions).toBeUndefined();
   });
 
   it('surfaces a 403 as WikiApiError.isForbidden (the bff @PreAuthorize denial)', async () => {

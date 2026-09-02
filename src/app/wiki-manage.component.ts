@@ -2,7 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
-import { WikiService, WikiAccess, WikiApiError } from './wiki.service';
+import { WikiService, WikiAccess, WikiApiError, WikiAuditEntry } from './wiki.service';
 
 /**
  * The MANAGE view — the superadmin-only surface over /bff/wiki/superadmin/**
@@ -36,9 +36,25 @@ export class WikiManageComponent implements OnInit {
   readonly historyLoading = signal(false);
   readonly historyError = signal('');
 
-  readonly audit = signal<Array<Record<string, unknown>>>([]);
+  /** The audit rows, TYPED against the generated client (wiki-ui#2). Before the
+   *  bff grew a real AuditList/AuditEntry schema this was
+   *  `Array<Record<string, unknown>>` and the table had to discover its own
+   *  columns from `Object.keys(row)` — which meant an empty trail rendered no
+   *  header at all, and a bff-side rename showed up as a silently missing column
+   *  instead of a build failure. */
+  readonly audit = signal<WikiAuditEntry[]>([]);
   readonly auditLoading = signal(true);
   readonly auditError = signal('');
+
+  /** The bff's own bound on `?limit` (WikiAuditLogRepository clamps to [1, 1000]).
+   *  Mirrored here so an out-of-range value is refused BEFORE the round-trip; the
+   *  server re-clamps regardless, so this is convenience, never the real gate. */
+  static readonly AUDIT_LIMIT_MIN = 1;
+  static readonly AUDIT_LIMIT_MAX = 1000;
+
+  /** The bff's default page size when `?limit` is omitted — also this control's
+   *  starting value, so the first read matches what the server would have done. */
+  static readonly AUDIT_LIMIT_DEFAULT = 200;
 
   /** The page sizes the audit-trail control offers. The bff clamps ?limit to
    *  [1, 1000] and defaults to 200 when unset, so these are the useful stops
@@ -46,7 +62,23 @@ export class WikiManageComponent implements OnInit {
   readonly auditLimits: readonly number[] = [50, 100, 200, 500, 1000];
 
   /** Selected audit page size; starts at the bff's own default (200). */
-  readonly auditLimit = signal(200);
+  readonly auditLimit = signal(WikiManageComponent.AUDIT_LIMIT_DEFAULT);
+
+  /** Inline validation message for the limit control ('' = valid). Rendered as
+   *  text next to the field — never a modal/alert, which would hang a headless
+   *  test and block the page. */
+  readonly auditLimitError = signal('');
+
+  /** The audit columns, in render order, now that the row shape is known. Keyed
+   *  on {@link WikiAuditEntry} so a bff-side rename is a COMPILE error here. */
+  readonly auditColumns: ReadonlyArray<{ key: keyof WikiAuditEntry; label: string }> = [
+    { key: 'createdAt', label: 'When' },
+    { key: 'actorSubject', label: 'Actor' },
+    { key: 'action', label: 'Action' },
+    { key: 'target', label: 'Target' },
+    { key: 'domain', label: 'Brand' },
+    { key: 'detail', label: 'Detail' },
+  ];
 
   /**
    * Track-by for the active-access and history tables.
@@ -105,13 +137,16 @@ export class WikiManageComponent implements OnInit {
   /**
    * Fetch the wiki content-edit audit trail at the selected page size.
    * Calls GET /bff/wiki/superadmin/audit?limit={@link auditLimit} (newest first).
-   * The audit DTO is BFF-defined (untyped record list); rendered generically.
+   * The response is the generated {@link AuditTrail} model, so `actions` is a
+   * typed {@link WikiAuditEntry} list rather than an open record.
    */
   async reloadAudit(): Promise<void> {
     this.auditLoading.set(true);
     this.auditError.set('');
     try {
       const res = await this.wiki.auditTrail(this.auditLimit());
+      // `actions` is optional on the generated model (springdoc marks no field
+      // required), so an absent key is still normalized to an empty trail.
       this.audit.set(res.actions ?? []);
     } catch (e) {
       this.auditError.set(this.message(e, 'audit trail'));
@@ -121,35 +156,54 @@ export class WikiManageComponent implements OnInit {
   }
 
   /**
-   * Change the audit page size and re-read the trail at the new bound.
-   * The bff re-clamps whatever it is sent, so an out-of-range value can only
-   * ever cost a round-trip, never an unbounded scan.
+   * Validate and apply a requested audit page size, then re-read the trail.
    *
-   * @param limit - The requested row count (one of {@link auditLimits}).
+   * The select can only emit one of {@link auditLimits}, but this is also the
+   * seam a host, a spec, or a future free-entry field reaches — so the value is
+   * validated here rather than trusted: a non-numeric or fractional request is
+   * REFUSED (the current limit stands, an inline message says why, and no request
+   * is made), and a numeric one outside the bff's own [1, 1000] bound is CLAMPED
+   * to the nearest end rather than sent. The bff re-clamps whatever it receives,
+   * so this can never be the only bound — it just stops the console from spending
+   * a round-trip to learn what it already knows.
+   *
+   * @param limit - The requested row count (a number, or the string an
+   *                `[value]`-bound select would emit).
    */
-  setAuditLimit(limit: number): void {
-    this.auditLimit.set(limit);
+  setAuditLimit(limit: number | string): void {
+    const requested = typeof limit === 'string' ? Number(limit.trim()) : limit;
+
+    if (!Number.isInteger(requested)) {
+      this.auditLimitError.set('Rows to load must be a whole number.');
+      return;
+    }
+
+    const min = WikiManageComponent.AUDIT_LIMIT_MIN;
+    const max = WikiManageComponent.AUDIT_LIMIT_MAX;
+    const clamped = Math.min(Math.max(requested, min), max);
+    this.auditLimitError.set(
+      clamped === requested ? '' : `Rows to load must be between ${min} and ${max} — using ${clamped}.`,
+    );
+
+    // An unchanged limit is not a reason to re-read; the Retry button is the
+    // explicit refresh. (A rejected value above returned before reaching here.)
+    if (clamped === this.auditLimit()) return;
+
+    this.auditLimit.set(clamped);
     void this.reloadAudit();
   }
 
   /**
-   * Return the column keys of an audit row for generic table rendering.
-   * The audit DTO shape is BFF-defined; we render all keys dynamically.
+   * Coerce an audit cell to a display string.
    *
-   * @param row - One audit row from the BFF response.
-   * @returns The ordered property names of the row.
+   * @param row - One typed audit row.
+   * @param key - The column to read.
+   * @returns The cell text, or `''` when the column is null/absent (`detail` is
+   *          nullable in wiki_audit_log, and every field is optional on the
+   *          generated model).
    */
-  auditKeys(row: Record<string, unknown>): string[] {
-    return Object.keys(row);
-  }
-
-  /**
-   * Coerce an audit cell value to a display string.
-   *
-   * @param v - The raw cell value (any JSON-compatible type).
-   * @returns A string representation, or `''` for null/undefined.
-   */
-  auditValue(v: unknown): string {
+  auditCell(row: WikiAuditEntry, key: keyof WikiAuditEntry): string {
+    const v = row[key];
     return v == null ? '' : String(v);
   }
 
