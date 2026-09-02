@@ -5,6 +5,8 @@ import { WikiAccessService as GeneratedWikiAccessService } from './api/services/
 import { WikiAttachmentsService as GeneratedWikiAttachmentsService } from './api/services/wiki-attachments.service';
 import { CreatePage as CreatePageModel } from './api/models/create-page';
 import { UpdatePage as UpdatePageModel } from './api/models/update-page';
+import { AuditEntry as AuditEntryModel } from './api/models/audit-entry';
+import { AuditList as AuditListModel } from './api/models/audit-list';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -113,6 +115,26 @@ export interface WikiAccess {
 export interface AccessList {
   access: WikiAccess[];
 }
+
+/** WikiDto.AuditEntry — one `wiki_audit_log` row (the content-edit trail).
+ *
+ *  This is the GENERATED model, re-exported rather than re-declared: it comes from
+ *  ng-openapi-gen over hugmesh-wiki-bff-api's committed OpenAPI spec, so it cannot
+ *  drift from the bff the way a hand-written mirror can. Every property is optional
+ *  because the spec marks no field required (springdoc emits no `required` list for
+ *  a Java record) — `detail` really is nullable in the table, and the rest are
+ *  populated on every row the bff writes. Read cells through
+ *  {@link WikiService.auditTrail}'s consumers with a null-safe coercion.
+ *
+ *  Before wiki-ui#2 this surface was `Record<string, unknown>`: the bff returned an
+ *  untyped `Map<String,Object>`, springdoc rendered it as an open object, and the
+ *  generated client typed it as `{[key: string]: {}}`. The fix landed a real
+ *  `AuditList`/`AuditEntry` schema on the bff. */
+export type WikiAuditEntry = AuditEntryModel;
+
+/** WikiDto.AuditList — `{ actions: [...] }`, newest first, bounded by `?limit`.
+ *  The generated model (see {@link WikiAuditEntry}). */
+export type AuditTrail = AuditListModel;
 
 /** WikiAccessDto.GrantOrBan — POST .../access/grant and .../access/ban.
  *
@@ -406,16 +428,20 @@ export class WikiService {
     return body as unknown as AccessList;
   }
 
-  /** GET /bff/wiki/superadmin/audit → { actions:[...] } — the wiki_audit_log
-   *  content-edit trail. The shape is bff-defined (a list of audit rows); we
-   *  surface it untyped (Record) since the audit DTO is not on the typed boundary.
+  /** GET /bff/wiki/superadmin/audit → {@link AuditTrail} — the wiki_audit_log
+   *  content-edit trail, newest first.
+   *
+   *  TYPED against the generated client (wiki-ui#2): the bff now declares a real
+   *  `AuditList`/`AuditEntry` schema, so `wikiAuditTrail()` already returns
+   *  {@link AuditTrail} and this wrapper needs NO cast — the `as unknown as`
+   *  every other method here still carries (their hand-written mirrors predate the
+   *  generated models) is exactly what a typed schema removes. A shape change on
+   *  the bff now breaks this build instead of silently reaching the template.
+   *
    *  `limit` is the optional page size the bff clamps to [1, 1000]; leave it
    *  unset to take the server default (200, newest first) — an omitted limit
-   *  sends no query param at all, exactly as before. */
-  async auditTrail(limit?: number): Promise<{ actions: Array<Record<string, unknown>> }> {
-    const body = await this.content.wikiAuditTrail({ limit }).catch((e) =>
-      this.mapHttpError(e),
-    );
-    return body as unknown as { actions: Array<Record<string, unknown>> };
+   *  sends no query param at all. */
+  async auditTrail(limit?: number): Promise<AuditTrail> {
+    return this.content.wikiAuditTrail({ limit }).catch((e) => this.mapHttpError(e));
   }
 }

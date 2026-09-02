@@ -3,6 +3,8 @@
 
 export type { Access } from './models/access';
 export type { AccessList } from './models/access-list';
+export type { AuditEntry } from './models/audit-entry';
+export type { AuditList } from './models/audit-list';
 export type { CreatePage } from './models/create-page';
 export type { GrantOrBan } from './models/grant-or-ban';
 export type { Page } from './models/page';

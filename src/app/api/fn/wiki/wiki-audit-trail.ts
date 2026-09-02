@@ -7,15 +7,13 @@ import { filter, map } from 'rxjs/operators';
 import { StrictHttpResponse } from '../../strict-http-response';
 import { RequestBuilder } from '../../request-builder';
 
+import { AuditList } from '../../models/audit-list';
 
 export interface WikiAuditTrail$Params {
   limit?: number;
 }
 
-export function wikiAuditTrail(http: HttpClient, rootUrl: string, params?: WikiAuditTrail$Params, context?: HttpContext): Observable<StrictHttpResponse<{
-[key: string]: {
-};
-}>> {
+export function wikiAuditTrail(http: HttpClient, rootUrl: string, params?: WikiAuditTrail$Params, context?: HttpContext): Observable<StrictHttpResponse<AuditList>> {
   const rb = new RequestBuilder(rootUrl, wikiAuditTrail.PATH, 'get');
   if (params) {
     rb.query('limit', params.limit, {});
@@ -26,10 +24,7 @@ export function wikiAuditTrail(http: HttpClient, rootUrl: string, params?: WikiA
   ).pipe(
     filter((r: any): r is HttpResponse<any> => r instanceof HttpResponse),
     map((r: HttpResponse<any>) => {
-      return r as StrictHttpResponse<{
-      [key: string]: {
-      };
-      }>;
+      return r as StrictHttpResponse<AuditList>;
     })
   );
 }

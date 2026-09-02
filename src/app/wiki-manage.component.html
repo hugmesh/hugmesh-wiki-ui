@@ -116,6 +116,9 @@
       <p class="wiki-field__help" id="wiki-audit-limit-help">
         Newest first. The server bounds the trail to 1000 rows per read and defaults to 200.
       </p>
+      @if (auditLimitError()) {
+        <p class="wiki-error" role="alert" data-testid="wiki-manage-audit-limit-error">{{ auditLimitError() }}</p>
+      }
     </div>
     @if (auditLoading()) {
       <p class="wiki-muted" role="status">Loading audit trail…</p>
@@ -129,13 +132,13 @@
         <caption class="sr">Wiki content edit audit trail</caption>
         <thead>
           <tr>
-            @for (k of auditKeys(audit()[0]); track k) { <th scope="col">{{ k }}</th> }
+            @for (c of auditColumns; track c.key) { <th scope="col">{{ c.label }}</th> }
           </tr>
         </thead>
         <tbody>
           @for (row of audit(); track $index) {
             <tr>
-              @for (k of auditKeys(row); track k) { <td>{{ auditValue(row[k]) }}</td> }
+              @for (c of auditColumns; track c.key) { <td>{{ auditCell(row, c.key) }}</td> }
             </tr>
           }
         </tbody>
