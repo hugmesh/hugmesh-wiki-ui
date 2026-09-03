@@ -49,4 +49,21 @@
   &__edit {
     margin-left: auto;
   }
+
+  // The armed delete confirmation is a full-width band under its own row, so it
+  // is unambiguous WHICH page it belongs to (only one row can ever be armed).
+  &__confirm {
+    flex: 1 0 100%;
+    margin-top: 0.5rem;
+    border-color: var(--wiki-error);
+
+    p {
+      margin: 0 0 0.75rem;
+    }
+  }
+
+  &__confirm-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
 }

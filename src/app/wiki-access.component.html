@@ -77,9 +77,13 @@
     @if (showTargetDomain()) {
       <div class="wiki-field">
         <label for="wiki-access-target-domain">Target brand</label>
+        <!-- A COMBOBOX, not a select: the suggestions below are the brands this
+             console can observe, which is a subset of the server's registry, so a
+             brand it has not seen must still be typeable. The server validates. -->
         <input
           id="wiki-access-target-domain"
           name="targetDomain"
+          list="wiki-access-brand-options"
           [ngModel]="targetDomain()"
           (ngModelChange)="targetDomain.set($event)"
           data-testid="wiki-access-target-domain"
@@ -87,10 +91,29 @@
           maxlength="64"
           autocomplete="off"
         />
+        <datalist id="wiki-access-brand-options" data-testid="wiki-access-brand-options">
+          @for (b of brandOptions(); track b) {
+            <option [value]="b"></option>
+          }
+        </datalist>
         <p class="wiki-field__help" id="wiki-access-target-domain-help">
           The brand the user belongs to. On a multi-brand deployment a superadmin
           must name it — the change is rejected otherwise, because it would not
           apply to the user. Leave blank on a single-brand deployment.
+          @if (brandsLoading()) {
+            <span data-testid="wiki-access-brands-loading">Loading brand suggestions…</span>
+          } @else if (brandOptions().length > 0) {
+            <span data-testid="wiki-access-brands-hint">
+              Suggestions list the {{ brandOptions().length }} brand(s) already seen in the
+              access and audit trails — a brand with no activity yet will not be listed, so
+              you can type any brand. The server rejects one it does not know.
+            </span>
+          } @else {
+            <span data-testid="wiki-access-brands-none">
+              No brands observed yet, so there is nothing to suggest — type the brand name.
+              The server rejects one it does not know.
+            </span>
+          }
         </p>
       </div>
     }

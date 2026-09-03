@@ -169,6 +169,24 @@ export interface TimeoutBody {
  *  in the editor so the author gets an inline hint before the round-trip. */
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/** Server-side domain SENTINELS that are stamped onto real rows but can NEVER be a
+ *  valid `targetDomain`, so they must never be offered as a brand suggestion:
+ *
+ *  - `default` — hugmesh-commons `DomainRegistry.DEFAULT_DOMAIN`, the single-issuer
+ *    back-compat brand. `DomainRegistry#isKnownDomain` rejects it BEFORE consulting
+ *    the registry, so `PrincipalDomain#resolveKnownDomain` resolves null and
+ *    `WikiAccessService#writeDomain` 400s. Rows carry it legitimately: the bff's
+ *    `WikiAuditLogRepository#record` coerces a SUPERADMIN's own null scope to it, so
+ *    every page a SUPERADMIN creates, edits, publishes or DELETES stamps a `default`
+ *    audit row.
+ *  - `__deny__` — the bff's fail-closed scope sentinel (`PrincipalDomain#forScope`
+ *    for a non-SUPERADMIN whose issuer the registry cannot resolve), which
+ *    `WikiAccessService#writeDomain` passes through verbatim onto a written row.
+ *
+ *  Offering either would hand the operator a guaranteed-rejected pick from a list
+ *  whose entire purpose is the opposite. */
+export const DOMAIN_SENTINELS: readonly string[] = ['default', '__deny__'];
+
 /** A typed error the service raises so components can surface the EXACT failure
  *  the bff returned — the 409 stale-edit / duplicate-slug and the 403 the
  *  @PreAuthorize / WikiAccessGuard returns are both rendered specifically. */
@@ -443,5 +461,65 @@ export class WikiService {
    *  sends no query param at all. */
   async auditTrail(limit?: number): Promise<AuditTrail> {
     return this.content.wikiAuditTrail({ limit }).catch((e) => this.mapHttpError(e));
+  }
+
+  // ----- BRAND SUGGESTIONS (WIKI_MANAGE = SUPERADMIN) ---------------------
+  //
+  // The wiki-bff exposes NO known-brands endpoint: the authoritative list lives
+  // in its DomainRegistry (issuer -> brand, seeded from app.tenancy.issuers) and
+  // is never served. Until it is (hugmesh-wiki-bff-api issue #12), the closest
+  // honest source is OBSERVATION: the two SUPERADMIN cross-domain reads this
+  // console already makes both stamp the row's server-derived `domain`.
+  //
+  //   GET /bff/wiki/superadmin/access          -> every brand's ACTIVE overrides
+  //   GET /bff/wiki/superadmin/audit           -> every brand's content-edit trail
+  //
+  // That union is a SUBSET, never the registry: a brand with no override row and
+  // no audit entry inside the bounded newest-first audit page is invisible here.
+  // So this feeds a SUGGESTION list (a datalist combobox), never a closed select —
+  // the operator must still be able to type a brand this has not seen, and the
+  // bff stays the authority (it 400s an unknown brand, surfaced verbatim).
+
+  /**
+   * The brands this console can OBSERVE, for the SUPERADMIN target-brand
+   * suggestions. Reads the two cross-domain SUPERADMIN surfaces in parallel and
+   * unions their server-stamped `domain` values.
+   *
+   * Deliberately NEVER throws: the suggestions are a convenience over a field
+   * that works as free text without them, so a 403 (not a SUPERADMIN) or a
+   * transient failure on either read degrades to fewer suggestions — or none —
+   * rather than an error the operator cannot act on.
+   *
+   * @returns The sorted, de-duplicated, non-blank brand names observed, with the
+   *   never-targetable {@link DOMAIN_SENTINELS} filtered out. A SUBSET of the
+   *   bff's registry, never the whole of it.
+   */
+  async observedBrands(): Promise<string[]> {
+    const [access, audit] = await Promise.allSettled([
+      this.listActiveAccess(),
+      this.auditTrail(),
+    ]);
+    const seen = new Set<string>();
+    // Blank/non-string domains are dropped, and so are the bff's DOMAIN_SENTINELS:
+    // a row can legitimately carry `default` (or `__deny__`) while the bff rejects
+    // both outright as a `targetDomain`, so suggesting them would be a guaranteed
+    // 400 the operator did not type.
+    const add = (v: unknown): void => {
+      if (typeof v !== 'string') return;
+      const brand = v.trim();
+      if (brand.length > 0 && !DOMAIN_SENTINELS.includes(brand)) seen.add(brand);
+    };
+    if (access.status === 'fulfilled') {
+      for (const row of access.value.access ?? []) add(row.domain);
+    }
+    if (audit.status === 'fulfilled') {
+      // `domain` is now a TYPED field, not a string index: wiki-ui#2 landed the
+      // AuditList/AuditEntry schema on the bff (hugmesh-wiki-bff-api#13), so a
+      // server-side rename breaks this build instead of silently emptying the
+      // suggestion list. `add` still coerces, because every generated property is
+      // optional (springdoc emits no `required` list for a Java record).
+      for (const row of audit.value.actions ?? []) add(row.domain);
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
   }
 }

@@ -452,3 +452,109 @@ describe('WikiService — attachments (delegates to the generated client over Ht
     }
   });
 });
+
+/**
+ * BRAND SUGGESTIONS — {@link WikiService.observedBrands}, the client half of the
+ * issue-#3 brand picker. The wiki-bff serves NO known-brands endpoint (its
+ * DomainRegistry is never exposed), so this unions the server-stamped `domain`
+ * of the two SUPERADMIN cross-domain reads the console already makes. The specs
+ * pin the two properties the picker depends on: it is a SUBSET (so the field
+ * must stay typeable) and it NEVER rejects (so absent suggestions are not an
+ * error the operator is asked to act on).
+ */
+describe('WikiService — observed brands (the picker source, not an authority)', () => {
+  let service: WikiService;
+  let httpMock: HttpTestingController;
+  const sessionSig = signal<SnapSession | null>(adminSession());
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [
+        WikiService,
+        { provide: SessionService, useValue: { session: sessionSig } },
+        { provide: WIKI_BASE_URL, useValue: '' },
+        provideHttpClient(withInterceptors([authInterceptor])),
+        provideHttpClientTesting(),
+      ],
+    });
+    service = TestBed.inject(WikiService);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => httpMock.verify());
+
+  function accessRow(domain: string): WikiAccess {
+    return {
+      id: domain, domain, userSubject: 'u', accessType: 'read', state: 'active',
+      grantedBySubject: 'a', reason: null, createdAt: '', expiresAt: null, revokedAt: null,
+    };
+  }
+
+  it('unions both SUPERADMIN cross-domain reads, de-duplicated and sorted', async () => {
+    const promise = service.observedBrands();
+    httpMock.expectOne('/bff/wiki/superadmin/access')
+      .flush({ access: [accessRow('brandx'), accessRow('branda')] });
+    httpMock.expectOne('/bff/wiki/superadmin/audit')
+      .flush({ actions: [{ domain: 'brandx' }, { domain: 'brandm' }] });
+    expect(await promise).toEqual(['branda', 'brandm', 'brandx']);
+  });
+
+  it('picks up a brand only the audit trail has seen (no override rows yet)', async () => {
+    const promise = service.observedBrands();
+    httpMock.expectOne('/bff/wiki/superadmin/access').flush({ access: [] });
+    httpMock.expectOne('/bff/wiki/superadmin/audit').flush({ actions: [{ domain: 'brandonly' }] });
+    expect(await promise).toEqual(['brandonly']);
+  });
+
+  it('drops blank/absent/non-string domains rather than offering them', async () => {
+    const promise = service.observedBrands();
+    httpMock.expectOne('/bff/wiki/superadmin/access')
+      .flush({ access: [accessRow('  '), accessRow(' brandt ')] });
+    httpMock.expectOne('/bff/wiki/superadmin/audit')
+      .flush({ actions: [{ action: 'wiki.page.create' }, { domain: 7 }] });
+    expect(await promise).toEqual(['brandt']);
+  });
+
+  it('never suggests the bff sentinels "default"/"__deny__" (isKnownDomain rejects them)', async () => {
+    // A SUPERADMIN's OWN content actions stamp `default` audit rows
+    // (WikiAuditLogRepository#record coerces their null scope), and a
+    // fail-closed `__deny__` scope is written through onto an access row
+    // (PrincipalDomain#forScope). Both 400 as a targetDomain, so neither may
+    // ever reach the datalist — a suggestion the server always rejects is worse
+    // than no suggestion at all.
+    const promise = service.observedBrands();
+    httpMock.expectOne('/bff/wiki/superadmin/access')
+      .flush({ access: [accessRow('default'), accessRow('__deny__'), accessRow('brandt')] });
+    httpMock.expectOne('/bff/wiki/superadmin/audit')
+      .flush({ actions: [{ domain: 'default' }, { domain: 'brandt' }] });
+    expect(await promise)
+      .withContext('a sentinel always 400s as a targetDomain, so it must never be offered')
+      .toEqual(['brandt']);
+  });
+
+  it('resolves EMPTY when the only observed domain is the default sentinel', async () => {
+    // The single-issuer-migrated cluster: every legacy row is `default`. The
+    // honest state is "no brands observed yet", NOT one unusable suggestion.
+    const promise = service.observedBrands();
+    httpMock.expectOne('/bff/wiki/superadmin/access').flush({ access: [accessRow('default')] });
+    httpMock.expectOne('/bff/wiki/superadmin/audit').flush({ actions: [{ domain: 'default' }] });
+    expect(await promise).toEqual([]);
+  });
+
+  it('still returns the other source when ONE read is denied (403)', async () => {
+    const promise = service.observedBrands();
+    httpMock.expectOne('/bff/wiki/superadmin/access')
+      .flush({ error: 'forbidden' }, { status: 403, statusText: 'Forbidden' });
+    httpMock.expectOne('/bff/wiki/superadmin/audit').flush({ actions: [{ domain: 'brandb' }] });
+    expect(await promise).toEqual(['brandb']);
+  });
+
+  it('resolves EMPTY rather than rejecting when BOTH reads fail (a convenience, not a gate)', async () => {
+    const promise = service.observedBrands();
+    httpMock.expectOne('/bff/wiki/superadmin/access')
+      .flush({ error: 'forbidden' }, { status: 403, statusText: 'Forbidden' });
+    httpMock.expectOne('/bff/wiki/superadmin/audit')
+      .flush({ error: 'forbidden' }, { status: 403, statusText: 'Forbidden' });
+    await expectAsync(promise).toBeResolvedTo([]);
+  });
+});
