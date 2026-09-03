@@ -515,6 +515,32 @@ describe('WikiService — observed brands (the picker source, not an authority)'
     expect(await promise).toEqual(['brandt']);
   });
 
+  it('never suggests the bff sentinels "default"/"__deny__" (isKnownDomain rejects them)', async () => {
+    // A SUPERADMIN's OWN content actions stamp `default` audit rows
+    // (WikiAuditLogRepository#record coerces their null scope), and a
+    // fail-closed `__deny__` scope is written through onto an access row
+    // (PrincipalDomain#forScope). Both 400 as a targetDomain, so neither may
+    // ever reach the datalist — a suggestion the server always rejects is worse
+    // than no suggestion at all.
+    const promise = service.observedBrands();
+    httpMock.expectOne('/bff/wiki/superadmin/access')
+      .flush({ access: [accessRow('default'), accessRow('__deny__'), accessRow('brandt')] });
+    httpMock.expectOne('/bff/wiki/superadmin/audit')
+      .flush({ actions: [{ domain: 'default' }, { domain: 'brandt' }] });
+    expect(await promise)
+      .withContext('a sentinel always 400s as a targetDomain, so it must never be offered')
+      .toEqual(['brandt']);
+  });
+
+  it('resolves EMPTY when the only observed domain is the default sentinel', async () => {
+    // The single-issuer-migrated cluster: every legacy row is `default`. The
+    // honest state is "no brands observed yet", NOT one unusable suggestion.
+    const promise = service.observedBrands();
+    httpMock.expectOne('/bff/wiki/superadmin/access').flush({ access: [accessRow('default')] });
+    httpMock.expectOne('/bff/wiki/superadmin/audit').flush({ actions: [{ domain: 'default' }] });
+    expect(await promise).toEqual([]);
+  });
+
   it('still returns the other source when ONE read is denied (403)', async () => {
     const promise = service.observedBrands();
     httpMock.expectOne('/bff/wiki/superadmin/access')

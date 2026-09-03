@@ -49,23 +49,26 @@
 
                 <!-- Delete = WIKI_WRITE and DESTRUCTIVE (the bff cascades to this
                      page's attachments), so this button only ARMS the inline
-                     confirmation below — the bff call is its confirm button. -->
+                     confirmation below — the bff call is its confirm button.
+                     Keyed on p.id, never p.slug: a slug is unique only within a
+                     brand, and a SUPERADMIN's list is cross-brand, so a slug key
+                     would arm every same-slug row at once. -->
                 <button
                   type="button"
                   class="wiki-btn wiki-btn--danger wiki-page-row__delete"
-                  (click)="askDelete(p.slug)"
-                  [disabled]="deletingSlug() !== null"
-                  [attr.data-testid]="'wiki-delete-' + p.slug"
+                  (click)="askDelete(p)"
+                  [disabled]="deletingId() !== null"
+                  [attr.data-testid]="'wiki-delete-' + p.id"
                   [attr.aria-label]="'Delete the wiki page ' + p.title"
                   aria-describedby="wiki-delete-help"
                 >Delete</button>
               }
 
-              @if (confirmingSlug() === p.slug) {
+              @if (confirmingId() === p.id) {
                 <section
                   class="wiki-page-row__confirm wiki-panel"
                   [attr.aria-label]="'Confirm deleting ' + p.title"
-                  [attr.data-testid]="'wiki-delete-confirm-' + p.slug"
+                  [attr.data-testid]="'wiki-delete-confirm-' + p.id"
                 >
                   <p class="wiki-warning" role="alert">
                     <code>{{ p.slug }}</code> and every attachment on it will be removed.
@@ -75,17 +78,17 @@
                     <button
                       type="button"
                       class="wiki-btn wiki-btn--danger"
-                      (click)="remove(p.slug)"
-                      [disabled]="deletingSlug() !== null"
-                      [attr.data-testid]="'wiki-delete-yes-' + p.slug"
+                      (click)="remove(p)"
+                      [disabled]="deletingId() !== null"
+                      [attr.data-testid]="'wiki-delete-yes-' + p.id"
                       [attr.aria-label]="'Confirm deleting the wiki page ' + p.title"
-                    >{{ deletingSlug() === p.slug ? 'Deleting…' : 'Delete permanently' }}</button>
+                    >{{ deletingId() === p.id ? 'Deleting…' : 'Delete permanently' }}</button>
                     <button
                       type="button"
                       class="wiki-btn wiki-btn--secondary"
                       (click)="cancelDelete()"
-                      [disabled]="deletingSlug() !== null"
-                      [attr.data-testid]="'wiki-delete-cancel-' + p.slug"
+                      [disabled]="deletingId() !== null"
+                      [attr.data-testid]="'wiki-delete-cancel-' + p.id"
                     >Cancel</button>
                   </div>
                 </section>

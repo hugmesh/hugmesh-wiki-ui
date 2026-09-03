@@ -18,6 +18,19 @@ import { SessionService } from './session.service';
  * browser modal (a modal in page logic hangs the headless suite). Only ONE row can
  * be armed at a time, so a confirm can never land on a row the operator forgot.
  *
+ * The destructive state is keyed on the row's `id`, NOT its slug. `slug` is unique
+ * only WITHIN a brand (`UNIQUE(domain, slug)` in the bff's changelog), and this
+ * list is cross-brand for a SUPERADMIN (WikiPageRepository#list(null)), so two rows
+ * can share a slug. A slug key would arm BOTH of their confirmations and drop BOTH
+ * rows on one confirm; `id` is the row identity the trackBy already uses.
+ *
+ * A completed delete is CONFIRMED by re-reading the list, not assumed: the bff
+ * answers 204 even when its DELETE removed no page row (its SUPERADMIN path finds
+ * the page cross-brand but scopes the DELETE to `default` —
+ * hugmesh-wiki-bff-api issue #15), so a 204 is not
+ * evidence the page is gone. If the row is still listed afterwards the operator is
+ * told, instead of being shown a success for a page that still exists.
+ *
  * a11y: h2 region heading; the list is a labelled role="region"; loading/empty/
  * error states are announced (role="status" / role="alert"); the New page link
  * + each row carry accessibleNames + describedby help; the delete outcome is
@@ -41,12 +54,13 @@ export class WikiPagesComponent implements OnInit {
   /** WIKI_WRITE gate: show the "New page" and per-row "Edit"/"Delete" affordances. */
   readonly canWrite = this.session.canWrite;
 
-  /** The slug whose inline delete confirmation is armed, or null when none is.
-   *  Single-valued on purpose: arming one row disarms any other. */
-  readonly confirmingSlug = signal<string | null>(null);
+  /** The page ID whose inline delete confirmation is armed, or null when none is.
+   *  Single-valued on purpose: arming one row disarms any other. Keyed on the row
+   *  ID, never the slug — a slug is unique only within a brand. */
+  readonly confirmingId = signal<string | null>(null);
 
-  /** The slug with an in-flight DELETE (disables that row's controls). */
-  readonly deletingSlug = signal<string | null>(null);
+  /** The page ID with an in-flight DELETE (disables that row's controls). */
+  readonly deletingId = signal<string | null>(null);
 
   /** A delete failure (announced; the list itself stays as it was). */
   readonly actionError = signal('');
@@ -80,7 +94,7 @@ export class WikiPagesComponent implements OnInit {
     this.error.set('');
     this.actionError.set('');
     this.notice.set('');
-    this.confirmingSlug.set(null);
+    this.confirmingId.set(null);
     try {
       const res = await this.wiki.listPages();
       this.pages.set(res.pages ?? []);
@@ -97,45 +111,70 @@ export class WikiPagesComponent implements OnInit {
    * this keeps a programmatic click honest (the bff @PreAuthorize is the
    * authority either way).
    *
-   * @param slug - The slug of the page to confirm deleting.
+   * @param p - The page summary of the row to confirm deleting; armed by its
+   *   `id`, so a same-slug row in another brand is NOT armed with it.
    */
-  askDelete(slug: string): void {
-    if (!this.canWrite() || this.deletingSlug()) return;
+  askDelete(p: PageSummary): void {
+    if (!this.canWrite() || this.deletingId()) return;
     this.actionError.set('');
     this.notice.set('');
-    this.confirmingSlug.set(slug);
+    this.confirmingId.set(p.id);
   }
 
   /** Dismiss the inline delete confirmation WITHOUT calling the bff. */
   cancelDelete(): void {
-    this.confirmingSlug.set(null);
+    this.confirmingId.set(null);
   }
 
   /**
    * Delete one page, once its inline confirmation was accepted.
    * Calls DELETE /bff/wiki/admin/pages/{slug} (WIKI_WRITE gated); the bff
    * cascades to the page's attachments and audits the removal.
-   * On success the row is dropped from the list in place — no re-read, since the
-   * server already told us the only row that changed.
-   * On failure the list is untouched and the reason is announced (403 = role
-   * denied, 404 = already gone).
    *
-   * @param slug - The slug of the page to delete.
+   * The delete is then VERIFIED by re-reading the list rather than assumed: the
+   * endpoint answers 204 unconditionally, including when it removed no page row
+   * (hugmesh-wiki-bff-api WikiService#delete resolves the page cross-brand for a
+   * SUPERADMIN but scopes the DELETE to `default`). So the list — not the status
+   * code — decides whether this announces a success or a "still listed" warning.
+   * If the re-read itself fails, the row we asked to remove is dropped locally and
+   * the ack says the list could not be re-checked.
+   *
+   * On a failed DELETE the list is untouched and the reason is announced (403 =
+   * role denied, 404 = already gone).
+   *
+   * @param p - The page summary of the row to delete.
    */
-  async remove(slug: string): Promise<void> {
-    if (!this.canWrite() || this.deletingSlug()) return;
-    this.deletingSlug.set(slug);
+  async remove(p: PageSummary): Promise<void> {
+    if (!this.canWrite() || this.deletingId()) return;
+    this.deletingId.set(p.id);
     this.actionError.set('');
     this.notice.set('');
     try {
-      await this.wiki.deletePage(slug);
-      this.pages.update((ps) => ps.filter((p) => p.slug !== slug));
-      this.confirmingSlug.set(null);
-      this.notice.set(`Deleted ${slug} and its attachments.`);
+      await this.wiki.deletePage(p.slug);
     } catch (e) {
       this.actionError.set(this.deleteMessage(e));
+      this.deletingId.set(null);
+      return;
+    }
+    try {
+      const res = await this.wiki.listPages();
+      const pages = res.pages ?? [];
+      this.pages.set(pages);
+      if (pages.some((row) => row.id === p.id)) {
+        this.actionError.set(
+          `The server accepted the delete but ${p.slug} is still listed — it may not have been removed.`,
+        );
+      } else {
+        this.notice.set(`Deleted ${p.slug} and its attachments.`);
+      }
+    } catch {
+      // The DELETE itself was accepted; only the confirming re-read failed. Drop
+      // the row we asked to remove and say plainly that it is unconfirmed.
+      this.pages.update((ps) => ps.filter((row) => row.id !== p.id));
+      this.notice.set(`Deleted ${p.slug}. The list could not be re-read to confirm.`);
     } finally {
-      this.deletingSlug.set(null);
+      this.confirmingId.set(null);
+      this.deletingId.set(null);
     }
   }
 

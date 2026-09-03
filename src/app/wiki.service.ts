@@ -169,6 +169,24 @@ export interface TimeoutBody {
  *  in the editor so the author gets an inline hint before the round-trip. */
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/** Server-side domain SENTINELS that are stamped onto real rows but can NEVER be a
+ *  valid `targetDomain`, so they must never be offered as a brand suggestion:
+ *
+ *  - `default` — hugmesh-commons `DomainRegistry.DEFAULT_DOMAIN`, the single-issuer
+ *    back-compat brand. `DomainRegistry#isKnownDomain` rejects it BEFORE consulting
+ *    the registry, so `PrincipalDomain#resolveKnownDomain` resolves null and
+ *    `WikiAccessService#writeDomain` 400s. Rows carry it legitimately: the bff's
+ *    `WikiAuditLogRepository#record` coerces a SUPERADMIN's own null scope to it, so
+ *    every page a SUPERADMIN creates, edits, publishes or DELETES stamps a `default`
+ *    audit row.
+ *  - `__deny__` — the bff's fail-closed scope sentinel (`PrincipalDomain#forScope`
+ *    for a non-SUPERADMIN whose issuer the registry cannot resolve), which
+ *    `WikiAccessService#writeDomain` passes through verbatim onto a written row.
+ *
+ *  Offering either would hand the operator a guaranteed-rejected pick from a list
+ *  whose entire purpose is the opposite. */
+export const DOMAIN_SENTINELS: readonly string[] = ['default', '__deny__'];
+
 /** A typed error the service raises so components can surface the EXACT failure
  *  the bff returned — the 409 stale-edit / duplicate-slug and the 403 the
  *  @PreAuthorize / WikiAccessGuard returns are both rendered specifically. */
@@ -472,8 +490,9 @@ export class WikiService {
    * transient failure on either read degrades to fewer suggestions — or none —
    * rather than an error the operator cannot act on.
    *
-   * @returns The sorted, de-duplicated, non-blank brand names observed. A
-   *   SUBSET of the bff's registry, never the whole of it.
+   * @returns The sorted, de-duplicated, non-blank brand names observed, with the
+   *   never-targetable {@link DOMAIN_SENTINELS} filtered out. A SUBSET of the
+   *   bff's registry, never the whole of it.
    */
   async observedBrands(): Promise<string[]> {
     const [access, audit] = await Promise.allSettled([
@@ -481,8 +500,14 @@ export class WikiService {
       this.auditTrail(),
     ]);
     const seen = new Set<string>();
+    // Blank/non-string domains are dropped, and so are the bff's DOMAIN_SENTINELS:
+    // a row can legitimately carry `default` (or `__deny__`) while the bff rejects
+    // both outright as a `targetDomain`, so suggesting them would be a guaranteed
+    // 400 the operator did not type.
     const add = (v: unknown): void => {
-      if (typeof v === 'string' && v.trim().length > 0) seen.add(v.trim());
+      if (typeof v !== 'string') return;
+      const brand = v.trim();
+      if (brand.length > 0 && !DOMAIN_SENTINELS.includes(brand)) seen.add(brand);
     };
     if (access.status === 'fulfilled') {
       for (const row of access.value.access ?? []) add(row.domain);

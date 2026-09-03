@@ -142,7 +142,15 @@ already makes (`GET /bff/wiki/superadmin/access` and
 a brand that has any access override or any recent content edit is one click
 away instead of one typo away. That union is a **subset** of the registry — a
 brand with neither is invisible to it — so the input stays typeable and the
-BFF's 400 remains the authority. `observedBrands` deliberately never rejects:
+BFF's 400 remains the authority. The union is also **filtered**: rows can
+legitimately carry the BFF's `default` back-compat sentinel (its
+`WikiAuditLogRepository#record` stamps a SUPERADMIN's own null scope as
+`default`, so every page a SUPERADMIN edits — or deletes from the list — writes
+one) or the fail-closed `__deny__` scope, and `DomainRegistry#isKnownDomain`
+rejects both outright, so a write targeting either always 400s. Suggesting them
+would hand the operator a guaranteed-rejected pick from a list whose whole
+purpose is the opposite, so `WikiService#DOMAIN_SENTINELS` drops them; a cluster
+whose only observed brand is `default` correctly shows *no* suggestions. `observedBrands` deliberately never rejects:
 if either read is denied or fails, the operator simply gets fewer suggestions
 (or none) rather than an error they cannot act on. An authoritative list needs
 the BFF-side endpoint (hugmesh-wiki-bff-api issue #12).
@@ -162,7 +170,10 @@ ng-openapi-gen clients (see **Typed API client** below). Auth rides the
   `expectedVersion` for optimistic-lock; 409 on stale edit)
 - `POST /bff/wiki/admin/pages/{slug}/publish` → publish
 - `DELETE /bff/wiki/admin/pages/{slug}` → delete page (204; cascades to the
-  page's attachments and is audited server-side; WIKI_WRITE)
+  page's attachments and is audited server-side; WIKI_WRITE). The `204` is
+  **unconditional** — the BFF returns it even when the DELETE matched no page
+  row — so the content list confirms the removal with a re-read rather than
+  trusting the status (tracked upstream as hugmesh-wiki-bff-api issue #15).
 - `GET  /bff/wiki/pages/{slug}/attachments` → `AttachmentList` (list, read tier)
 - `GET  /bff/wiki/pages/{slug}/attachments/{filename}` → download the raw bytes (read tier)
 - `POST /bff/wiki/admin/pages/{slug}/attachments` → upload (multipart `file` part; WIKI_WRITE)
@@ -516,8 +527,15 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   two-step in both places: it arms an inline confirmation that names the
   cascade, and only that confirmation's own button calls the bff. There is no
   browser modal. In the list only one row can be armed at a time, and a failed
-  delete leaves the row in place rather than faking it away. (See **BFF
-  endpoints consumed** above.)
+  delete leaves the row in place rather than faking it away. The list's armed
+  and in-flight state is keyed on the row **id**, never the slug: `slug` is
+  unique only *within* a brand (`UNIQUE(domain, slug)`) and a SUPERADMIN's list
+  is cross-brand, so two rows may share a slug and a slug key would arm — and
+  drop — all of them at once. The outcome is decided by a confirming **re-read**
+  rather than by the status code, because the endpoint answers `204` even when
+  its DELETE matched no row; if the page is still listed afterwards the operator
+  is told so instead of being shown a success. (See **BFF endpoints consumed**
+  above.)
 - **Shipped — Opaque `bff_` session (no bearer in `localStorage`):**
   `bffToken` and the per-service access tokens are not part of `SnapSession`;
   `/bff/*` calls ride the HttpOnly `bff_` cookie and the gateway exchanges it
@@ -550,10 +568,23 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   override and no entry in the bounded audit page is therefore not suggested,
   which is exactly why the field stays typeable rather than becoming a closed
   `<select>`, and why the bff's 400 on an unknown brand remains the real gate.
+  The observed set is additionally filtered of the never-targetable `default`
+  and `__deny__` sentinels (see **Access console: the cross-brand target**), so
+  a single-issuer-migrated cluster shows no suggestions rather than one that
+  always 400s.
   Closing this needs a brand-list endpoint on `hugmesh-wiki-bff-api` (the
   authoritative set is its server-side `DomainRegistry`, which already has
   `knownDomains()`); it cannot be closed from this repo. Tracked in
   hugmesh-wiki-bff-api issue #12.
+- **A page delete cannot be confirmed from the status code**: the bff's
+  `DELETE /bff/wiki/admin/pages/{slug}` answers `204` even when it removed no
+  page row — its SUPERADMIN path resolves the page cross-brand but scopes the
+  DELETE to `default` (`WikiService#delete` → `WikiPageRepository
+  #deleteBySlugAndDomain`), and the deleted-row count is discarded. This console
+  works around it by re-reading the list and warning when the page is still
+  there, but the workaround cannot recover the page's attachments, which that
+  path deletes unscoped first. The real fix is server-side, on
+  hugmesh-wiki-bff-api (issue #15).
 - **No cursor paging on the audit trail**: the manage view's "Rows to load"
   picker covers the bff's whole `[1, 1000]` `?limit` range, but the endpoint
   offers no cursor/offset, so 1000 newest-first rows is the deepest this
