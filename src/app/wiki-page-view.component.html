@@ -2,9 +2,17 @@
   @if (loading()) {
     <p class="wiki-muted" role="status">Loading page…</p>
   } @else if (deleted()) {
-    <p class="wiki-success" role="status" data-testid="wiki-view-deleted">
-      Deleted <code>{{ slug() }}</code> and its attachments.
-    </p>
+    <!-- The ack copy is built from what the confirming re-read actually proved
+         (clean removal / another brand now owns the slug / unconfirmed) — never a
+         bare "Deleted" asserted from the bff's unconditional 204. An UNCONFIRMED
+         outcome is styled as a warning, not a success: it is still announced
+         (role="status"), but it must not look like a verified removal. -->
+    <p
+      role="status"
+      data-testid="wiki-view-deleted"
+      [class.wiki-success]="!deleteUnconfirmed()"
+      [class.wiki-warning]="deleteUnconfirmed()"
+    >{{ deletedMsg() }}</p>
     <a routerLink="../../pages" class="wiki-btn wiki-btn--secondary">Back to pages</a>
   } @else if (error() && !page()) {
     <p class="wiki-error" role="alert" data-testid="wiki-view-error">{{ error() }}</p>

@@ -284,5 +284,151 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
         .withContext('absent suggestions are not an error the operator can act on')
         .toBeNull();
     });
+
+    // The observed reads cannot see a brand until it HAS a row, so the first write
+    // into a brand is always typed. The row that comes back carries the brand the
+    // bff validated against its registry — so learn from it, and only the second
+    // write into that brand needs no typing.
+    function options(): string[] {
+      return Array.from(
+        el().querySelectorAll('[data-testid="wiki-access-brand-options"] option'),
+      ).map((o) => (o as HTMLOptionElement).value);
+    }
+
+    it('learns the brand an applied row landed in, so the next write can pick it', async () => {
+      wiki.observedBrands.and.resolveTo(['branda']);
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      c.targetDomain.set('brandx');
+      wiki.grant.and.resolveTo(access({ domain: 'brandx' }));
+      await c.submit();
+      fixture.detectChanges();
+      expect(options())
+        .withContext('sorted, and learnt from the server-stamped row — not from what was typed')
+        .toEqual(['branda', 'brandx']);
+    });
+
+    it('learns from a ban and a timeout too, not only a grant', async () => {
+      wiki.observedBrands.and.resolveTo([]);
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.setAction('ban');
+      c.userSubject.set('u');
+      c.targetDomain.set('brandb');
+      wiki.ban.and.resolveTo(access({ accessType: 'banned', domain: 'brandb' }));
+      await c.submit();
+      c.setAction('timeout');
+      c.timeoutHours.set(1);
+      c.targetDomain.set('brandt');
+      wiki.timeout.and.resolveTo(access({ accessType: 'banned', domain: 'brandt' }));
+      await c.submit();
+      fixture.detectChanges();
+      expect(options()).toEqual(['brandb', 'brandt']);
+    });
+
+    it('never learns the "default" sentinel from a single-issuer deployment row', async () => {
+      // Single-issuer: the bff ignores targetDomain and stamps every row `default`,
+      // which its own isKnownDomain rejects. Learning it would hand the operator a
+      // suggestion guaranteed to 400.
+      wiki.observedBrands.and.resolveTo([]);
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      wiki.grant.and.resolveTo(access({ domain: 'default' }));
+      await c.submit();
+      fixture.detectChanges();
+      expect(options()).toEqual([]);
+      expect(el().querySelector('[data-testid="wiki-access-brands-none"]')).not.toBeNull();
+    });
+
+    it('learns what the server STAMPED, never what was typed', async () => {
+      // Single-issuer: the bff ignores targetDomain and stamps `default` regardless.
+      // The typed value was accepted by nobody, so it must not become a suggestion —
+      // only a brand the server itself put on a row has been validated.
+      wiki.observedBrands.and.resolveTo([]);
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      c.targetDomain.set('brandx');
+      wiki.grant.and.resolveTo(access({ domain: 'default' }));
+      await c.submit();
+      fixture.detectChanges();
+      expect(options())
+        .withContext('the write succeeded, but the brand it landed in was `default`')
+        .toEqual([]);
+    });
+
+    it('does not duplicate a brand that is already suggested', async () => {
+      wiki.observedBrands.and.resolveTo(['brandx']);
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      c.targetDomain.set('brandx');
+      wiki.grant.and.resolveTo(access({ domain: 'brandx' }));
+      await c.submit();
+      fixture.detectChanges();
+      expect(options()).toEqual(['brandx']);
+    });
+
+    it('does not let a slow suggestion read clobber a brand learnt while it was in flight', async () => {
+      // ngOnInit fires loadBrands() WITHOUT awaiting it, so a write can be applied
+      // — and its server-stamped brand learnt — while that read is still
+      // outstanding. If the read SET the options instead of folding into them, the
+      // learnt brand would vanish when the read landed, with nothing to say so.
+      // Every other learn-spec awaits whenStable() first, which puts the read in
+      // FRONT of the write and cannot see this at all.
+      let landRead!: (brands: string[]) => void;
+      wiki.observedBrands.and.returnValue(
+        new Promise<string[]>((resolve) => {
+          landRead = resolve;
+        }),
+      );
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges(); // ngOnInit → loadBrands() now in flight
+
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      c.targetDomain.set('brandx');
+      wiki.grant.and.resolveTo(access({ domain: 'brandx' }));
+      await c.submit(); // learnt while the read is still outstanding
+
+      landRead(['branda']); // ... and the read lands LAST
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(options())
+        .withContext('the read folds into the options, it does not replace them')
+        .toEqual(['branda', 'brandx']);
+    });
+
+    it('never learns a brand for a scoped ADMIN — the picker is not theirs to grow', async () => {
+      // Defence-in-depth: the whole target-brand block is behind showTargetDomain(),
+      // so a learnt brand could not be displayed to an ADMIN today. The role gate in
+      // learnBrand is what keeps that true, and nothing else pins it.
+      const c = fixture.componentInstance; // the default fixture is a scoped ADMIN
+      expect(c.showTargetDomain()).toBeFalse();
+      c.userSubject.set('u');
+      wiki.grant.and.resolveTo(access({ domain: 'brandx' }));
+      await c.submit();
+      fixture.detectChanges();
+      expect(c.brandOptions()).toEqual([]);
+    });
+
+    it('learns nothing when the write FAILED (no row, so no validated brand)', async () => {
+      wiki.observedBrands.and.resolveTo([]);
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      c.targetDomain.set('brandnope');
+      wiki.grant.and.rejectWith(
+        new WikiApiError(400, 'a SUPERADMIN grant must target a known brand via targetDomain'),
+      );
+      await c.submit();
+      fixture.detectChanges();
+      expect(options())
+        .withContext('the 400 is precisely the server saying this brand does not exist')
+        .toEqual([]);
+    });
   });
 });

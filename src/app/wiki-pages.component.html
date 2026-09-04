@@ -104,7 +104,14 @@
       }
 
       @if (notice()) {
-        <p class="wiki-success" role="status" data-testid="wiki-pages-notice">{{ notice() }}</p>
+        <!-- An UNCONFIRMED removal is announced but styled as a warning, not a
+             success: the page view applies the identical rule. -->
+        <p
+          role="status"
+          data-testid="wiki-pages-notice"
+          [class.wiki-success]="!noticeUnconfirmed()"
+          [class.wiki-warning]="noticeUnconfirmed()"
+        >{{ notice() }}</p>
       }
       @if (actionError()) {
         <p class="wiki-error" role="alert" data-testid="wiki-pages-action-error">{{ actionError() }}</p>

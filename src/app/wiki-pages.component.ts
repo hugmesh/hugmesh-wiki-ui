@@ -65,8 +65,15 @@ export class WikiPagesComponent implements OnInit {
   /** A delete failure (announced; the list itself stays as it was). */
   readonly actionError = signal('');
 
-  /** A delete success ack (announced; the row is already gone from the list). */
+  /** A delete ack (announced; on the confirmed path the row is already gone). */
   readonly notice = signal('');
+
+  /** True when the confirming re-read could not be made, so the ack in {@link notice}
+   *  reports an UNCONFIRMED removal. Rendered as a warning rather than a success, and
+   *  worded "accepted … unconfirmed": the page view applies the identical rule, and a
+   *  destructive action nobody verified must not read as a verified one on either
+   *  surface. */
+  readonly noticeUnconfirmed = signal(false);
 
   /**
    * Track-by for the page summary list. Prevents Angular from recreating DOM
@@ -94,6 +101,7 @@ export class WikiPagesComponent implements OnInit {
     this.error.set('');
     this.actionError.set('');
     this.notice.set('');
+    this.noticeUnconfirmed.set(false);
     this.confirmingId.set(null);
     try {
       const res = await this.wiki.listPages();
@@ -118,6 +126,7 @@ export class WikiPagesComponent implements OnInit {
     if (!this.canWrite() || this.deletingId()) return;
     this.actionError.set('');
     this.notice.set('');
+    this.noticeUnconfirmed.set(false);
     this.confirmingId.set(p.id);
   }
 
@@ -149,6 +158,7 @@ export class WikiPagesComponent implements OnInit {
     this.deletingId.set(p.id);
     this.actionError.set('');
     this.notice.set('');
+    this.noticeUnconfirmed.set(false);
     try {
       await this.wiki.deletePage(p.slug);
     } catch (e) {
@@ -167,11 +177,20 @@ export class WikiPagesComponent implements OnInit {
       } else {
         this.notice.set(`Deleted ${p.slug} and its attachments.`);
       }
-    } catch {
+    } catch (e) {
       // The DELETE itself was accepted; only the confirming re-read failed. Drop
-      // the row we asked to remove and say plainly that it is unconfirmed.
+      // the row we asked to remove and say plainly that it is unconfirmed — as a
+      // WARNING, and never opening with "Deleted", because nothing verified it.
       this.pages.update((ps) => ps.filter((row) => row.id !== p.id));
-      this.notice.set(`Deleted ${p.slug}. The list could not be re-read to confirm.`);
+      const why =
+        e instanceof WikiApiError && e.isForbidden
+          ? ' — the server denied read access'
+          : '';
+      this.notice.set(
+        `The delete of ${p.slug} was accepted, but the list could not be re-read${why}, ` +
+          `so the removal is unconfirmed.`,
+      );
+      this.noticeUnconfirmed.set(true);
     } finally {
       this.confirmingId.set(null);
       this.deletingId.set(null);

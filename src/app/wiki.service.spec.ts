@@ -10,6 +10,8 @@ import {
   WikiPage,
   WikiAccess,
   WikiAuditEntry,
+  DOMAIN_SENTINELS,
+  suggestableBrand,
 } from './wiki.service';
 import { authInterceptor } from './auth.interceptor';
 import { SessionService, SnapSession } from './session.service';
@@ -556,5 +558,33 @@ describe('WikiService — observed brands (the picker source, not an authority)'
     httpMock.expectOne('/bff/wiki/superadmin/audit')
       .flush({ error: 'forbidden' }, { status: 403, statusText: 'Forbidden' });
     await expectAsync(promise).toBeResolvedTo([]);
+  });
+});
+
+/**
+ * The shared "may this be offered as a brand suggestion?" rule. It has TWO call
+ * sites now — {@link WikiService.observedBrands} (brands read back from the two
+ * SUPERADMIN cross-domain surfaces) and the access console's learn-from-the-applied-row
+ * path — so it is pinned directly, not only through one of them: a sentinel that
+ * slipped past either site would be a suggestion the bff answers 400 to, forever.
+ */
+describe('suggestableBrand (the one filter both suggestion sources use)', () => {
+  it('accepts and trims a real brand', () => {
+    expect(suggestableBrand('  brandx  ')).toBe('brandx');
+  });
+
+  it('rejects every DOMAIN_SENTINEL, including with surrounding whitespace', () => {
+    for (const sentinel of DOMAIN_SENTINELS) {
+      expect(suggestableBrand(sentinel)).withContext(sentinel).toBeNull();
+      expect(suggestableBrand(` ${sentinel} `)).withContext(`padded ${sentinel}`).toBeNull();
+    }
+  });
+
+  it('rejects blank, absent and non-string values (every generated field is optional)', () => {
+    expect(suggestableBrand('')).toBeNull();
+    expect(suggestableBrand('   ')).toBeNull();
+    expect(suggestableBrand(undefined)).toBeNull();
+    expect(suggestableBrand(null)).toBeNull();
+    expect(suggestableBrand(7)).toBeNull();
   });
 });
