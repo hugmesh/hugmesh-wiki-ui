@@ -187,6 +187,26 @@ export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  *  whose entire purpose is the opposite. */
 export const DOMAIN_SENTINELS: readonly string[] = ['default', '__deny__'];
 
+/**
+ * The ONE rule for "may this value be offered as a target-brand suggestion?",
+ * shared by every source that feeds the picker so the sentinel filter cannot be
+ * applied in one place and forgotten in another.
+ *
+ * Every property of a generated model is optional (springdoc emits no `required`
+ * list for a Java record), and a row read cross-brand can carry a server-side
+ * sentinel that is never a legal `targetDomain`, so the value is coerced as well
+ * as filtered.
+ *
+ * @param v - A candidate brand, typically a row's server-stamped `domain`.
+ * @returns The trimmed brand when it is offerable, or `null` when it is absent,
+ *   not a string, blank, or one of the {@link DOMAIN_SENTINELS}.
+ */
+export function suggestableBrand(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const brand = v.trim();
+  return brand.length > 0 && !DOMAIN_SENTINELS.includes(brand) ? brand : null;
+}
+
 /** A typed error the service raises so components can surface the EXACT failure
  *  the bff returned — the 409 stale-edit / duplicate-slug and the 403 the
  *  @PreAuthorize / WikiAccessGuard returns are both rendered specifically. */
@@ -503,11 +523,12 @@ export class WikiService {
     // Blank/non-string domains are dropped, and so are the bff's DOMAIN_SENTINELS:
     // a row can legitimately carry `default` (or `__deny__`) while the bff rejects
     // both outright as a `targetDomain`, so suggesting them would be a guaranteed
-    // 400 the operator did not type.
+    // 400 the operator did not type. The rule itself lives in
+    // {@link suggestableBrand}, because the access console learns brands from the
+    // rows it WRITES too and both must filter identically.
     const add = (v: unknown): void => {
-      if (typeof v !== 'string') return;
-      const brand = v.trim();
-      if (brand.length > 0 && !DOMAIN_SENTINELS.includes(brand)) seen.add(brand);
+      const brand = suggestableBrand(v);
+      if (brand) seen.add(brand);
     };
     if (access.status === 'fulfilled') {
       for (const row of access.value.access ?? []) add(row.domain);

@@ -2,7 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
-import { WikiService, WikiAccess, WikiApiError } from './wiki.service';
+import { WikiService, WikiAccess, WikiApiError, suggestableBrand } from './wiki.service';
 import { SessionService } from './session.service';
 
 type AccessAction = 'grant' | 'timeout' | 'ban';
@@ -36,6 +36,12 @@ type AccessAction = 'grant' | 'timeout' | 'ban';
  * trusted DomainRegistry and a brand with no observable row would otherwise be untypeable.
  * The bff therefore stays the authority: it validates the value against the registry and a
  * 400 is surfaced verbatim, so an unknown brand is still caught server-side.
+ * The suggestions also LEARN: every applied row comes back with its server-stamped
+ * `domain`, and for a SUPERADMIN write the bff reached the insert only by validating that
+ * brand against the registry — so a brand typed once (necessarily, the first time it is
+ * used: no row of it existed to observe) is a suggestion for the rest of the session. See
+ * {@link learnBrand}. Until hugmesh-wiki-bff-api#12 serves the authoritative list, this is
+ * the closest the console gets: it can never be complete, and never claims to be.
  *
  * a11y: a labelled fieldset for the action form; each control has a <label> +
  * aria-describedby help; the result/error is announced (role="status"/"alert");
@@ -212,6 +218,7 @@ export class WikiAccessComponent implements OnInit {
           break;
       }
       this.result.set(row);
+      this.learnBrand(row.domain);
     } catch (e) {
       this.error.set(this.message(e));
     } finally {
@@ -261,6 +268,34 @@ export class WikiAccessComponent implements OnInit {
     } finally {
       this.busy.set(false);
     }
+  }
+
+  /**
+   * Fold the brand a write actually landed in into the suggestion list.
+   *
+   * The row's `domain` is SERVER-STAMPED, and for a SUPERADMIN cross-brand write the
+   * bff reaches the insert only after validating `targetDomain` against its trusted
+   * DomainRegistry (`WikiAccessService.writeDomain`, which 400s otherwise) — so a
+   * brand that comes BACK on a row is known-good. That makes it a better source than
+   * the observed reads, which cannot see a brand until it already has a row: the very
+   * first write into a brand must be typed, and only this stops the second one from
+   * having to be typed again.
+   *
+   * Filtered through the shared {@link suggestableBrand}, so a single-issuer
+   * deployment (where every row is stamped `default`) never gains a suggestion the
+   * bff would reject. Only a SUPERADMIN is offered the field at all, so only they
+   * learn: an ADMIN's rows carry their own issuer-derived brand and no control that
+   * could ever show it.
+   *
+   * @param domain - The `domain` of the row the bff just returned.
+   */
+  private learnBrand(domain: unknown): void {
+    if (!this.showTargetDomain()) return;
+    const brand = suggestableBrand(domain);
+    if (!brand) return;
+    this.brandOptions.update((opts) =>
+      opts.includes(brand) ? opts : [...opts, brand].sort((a, b) => a.localeCompare(b)),
+    );
   }
 
   /**

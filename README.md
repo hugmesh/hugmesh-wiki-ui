@@ -152,8 +152,23 @@ would hand the operator a guaranteed-rejected pick from a list whose whole
 purpose is the opposite, so `WikiService#DOMAIN_SENTINELS` drops them; a cluster
 whose only observed brand is `default` correctly shows *no* suggestions. `observedBrands` deliberately never rejects:
 if either read is denied or fails, the operator simply gets fewer suggestions
-(or none) rather than an error they cannot act on. An authoritative list needs
-the BFF-side endpoint (hugmesh-wiki-bff-api issue #12).
+(or none) rather than an error they cannot act on.
+
+The suggestions also **learn from what is applied**. Observation has an
+unavoidable blind spot: a brand cannot be observed until it *has* a row, so the
+first write into a brand must always be typed. Every applied row comes back
+carrying its **server-stamped** `domain`, and for a SUPERADMIN cross-brand write
+the BFF only reaches the insert after validating that brand against its registry
+— so the returned brand is known-good, and `WikiAccessComponent#learnBrand`
+folds it into the datalist for the rest of the session. It learns what the
+server **stamped**, never what was typed: on a single-issuer cluster the BFF
+ignores the field and stamps `default`, and that must not become a suggestion,
+so the same `suggestableBrand` filter the observed union uses is applied here
+too. A write that FAILS teaches nothing — a 400 is precisely the server saying
+that brand does not exist.
+
+An authoritative list still needs the BFF-side endpoint
+(hugmesh-wiki-bff-api issue #12); everything above is a subset by construction.
 
 ## BFF endpoints consumed (`/bff/wiki/**`)
 
@@ -172,8 +187,10 @@ ng-openapi-gen clients (see **Typed API client** below). Auth rides the
 - `DELETE /bff/wiki/admin/pages/{slug}` → delete page (204; cascades to the
   page's attachments and is audited server-side; WIKI_WRITE). The `204` is
   **unconditional** — the BFF returns it even when the DELETE matched no page
-  row — so the content list confirms the removal with a re-read rather than
-  trusting the status (tracked upstream as hugmesh-wiki-bff-api issue #15).
+  row — so **both** delete surfaces confirm the removal with a re-read rather
+  than trusting the status: the content list re-reads `GET /bff/wiki/pages`, the
+  page view re-reads `GET /bff/wiki/pages/{slug}` (tracked upstream as
+  hugmesh-wiki-bff-api issue #15).
 - `GET  /bff/wiki/pages/{slug}/attachments` → `AttachmentList` (list, read tier)
 - `GET  /bff/wiki/pages/{slug}/attachments/{filename}` → download the raw bytes (read tier)
 - `POST /bff/wiki/admin/pages/{slug}/attachments` → upload (multipart `file` part; WIKI_WRITE)
@@ -534,8 +551,19 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   drop — all of them at once. The outcome is decided by a confirming **re-read**
   rather than by the status code, because the endpoint answers `204` even when
   its DELETE matched no row; if the page is still listed afterwards the operator
-  is told so instead of being shown a success. (See **BFF endpoints consumed**
-  above.)
+  is told so instead of being shown a success. **The page view applies the same
+  rule**, and can be exact about it: it re-reads `GET /bff/wiki/pages/{slug}`,
+  which resolves through the *same* server-side lookup the delete itself used,
+  and compares the row **`id`** — so a `404` is a confirmed removal; the same id
+  coming back is a page the DELETE left behind (announced as a warning naming
+  the brand it still lives in, with the page left rendered); a *different* id is
+  another brand's page that legally shares the slug, and therefore still a
+  completed delete; and a re-read that fails at all is reported as
+  **unconfirmed** rather than as either outcome. Because the BFF runs the
+  attachment cascade *before* the page delete, a page that survives has already
+  lost its attachments, so that path also re-reads the embedded attachments
+  panel instead of leaving destroyed files listed. (See **BFF endpoints
+  consumed** above.)
 - **Shipped — Opaque `bff_` session (no bearer in `localStorage`):**
   `bffToken` and the per-service access tokens are not part of `SnapSession`;
   `/bff/*` calls ride the HttpOnly `bff_` cookie and the gateway exchanges it
@@ -581,9 +609,11 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   page row — its SUPERADMIN path resolves the page cross-brand but scopes the
   DELETE to `default` (`WikiService#delete` → `WikiPageRepository
   #deleteBySlugAndDomain`), and the deleted-row count is discarded. This console
-  works around it by re-reading the list and warning when the page is still
-  there, but the workaround cannot recover the page's attachments, which that
-  path deletes unscoped first. The real fix is server-side, on
+  works around it in BOTH delete surfaces — the list re-reads the page list, the
+  page view re-reads the page itself and decides on the row id — and warns when
+  the page is still there, but the workaround **cannot recover the page's
+  attachments**, which that path deletes unscoped first; it can only stop them
+  being listed as though they survived. The real fix is server-side, on
   hugmesh-wiki-bff-api (issue #15).
 - **No cursor paging on the audit trail**: the manage view's "Rows to load"
   picker covers the bff's whole `[1, 1000]` `?limit` range, but the endpoint
