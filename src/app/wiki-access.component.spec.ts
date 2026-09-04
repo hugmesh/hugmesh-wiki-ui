@@ -371,6 +371,50 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
       expect(options()).toEqual(['brandx']);
     });
 
+    it('does not let a slow suggestion read clobber a brand learnt while it was in flight', async () => {
+      // ngOnInit fires loadBrands() WITHOUT awaiting it, so a write can be applied
+      // — and its server-stamped brand learnt — while that read is still
+      // outstanding. If the read SET the options instead of folding into them, the
+      // learnt brand would vanish when the read landed, with nothing to say so.
+      // Every other learn-spec awaits whenStable() first, which puts the read in
+      // FRONT of the write and cannot see this at all.
+      let landRead!: (brands: string[]) => void;
+      wiki.observedBrands.and.returnValue(
+        new Promise<string[]>((resolve) => {
+          landRead = resolve;
+        }),
+      );
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges(); // ngOnInit → loadBrands() now in flight
+
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      c.targetDomain.set('brandx');
+      wiki.grant.and.resolveTo(access({ domain: 'brandx' }));
+      await c.submit(); // learnt while the read is still outstanding
+
+      landRead(['branda']); // ... and the read lands LAST
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(options())
+        .withContext('the read folds into the options, it does not replace them')
+        .toEqual(['branda', 'brandx']);
+    });
+
+    it('never learns a brand for a scoped ADMIN — the picker is not theirs to grow', async () => {
+      // Defence-in-depth: the whole target-brand block is behind showTargetDomain(),
+      // so a learnt brand could not be displayed to an ADMIN today. The role gate in
+      // learnBrand is what keeps that true, and nothing else pins it.
+      const c = fixture.componentInstance; // the default fixture is a scoped ADMIN
+      expect(c.showTargetDomain()).toBeFalse();
+      c.userSubject.set('u');
+      wiki.grant.and.resolveTo(access({ domain: 'brandx' }));
+      await c.submit();
+      fixture.detectChanges();
+      expect(c.brandOptions()).toEqual([]);
+    });
+
     it('learns nothing when the write FAILED (no row, so no validated brand)', async () => {
       wiki.observedBrands.and.resolveTo([]);
       await renderAsSuperadmin();

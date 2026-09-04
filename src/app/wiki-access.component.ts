@@ -8,6 +8,21 @@ import { SessionService } from './session.service';
 type AccessAction = 'grant' | 'timeout' | 'ban';
 
 /**
+ * Union two brand-suggestion lists into one sorted, de-duplicated list.
+ *
+ * Every producer of suggestions folds through this: the observation read and the
+ * learn-on-write path both run against a list the other may already have grown,
+ * and neither may clobber the other's entries.
+ *
+ * @param a - The existing suggestions.
+ * @param b - The suggestions to fold in.
+ * @returns The de-duplicated union, sorted for a stable datalist order.
+ */
+function mergeBrands(a: readonly string[], b: readonly string[]): string[] {
+  return [...new Set([...a, ...b])].sort((x, y) => x.localeCompare(y));
+}
+
+/**
  * The ACCESS console — the grant / timeout / ban / restore overlay over
  * /bff/wiki/admin/access/** (WikiAccessController). Write-gated (wikiWriteGuard:
  * WIKI_WRITE = ADMIN|SUPERADMIN); a MOD reader never reaches it.
@@ -39,7 +54,9 @@ type AccessAction = 'grant' | 'timeout' | 'ban';
  * The suggestions also LEARN: every applied row comes back with its server-stamped
  * `domain`, and for a SUPERADMIN write the bff reached the insert only by validating that
  * brand against the registry — so a brand typed once (necessarily, the first time it is
- * used: no row of it existed to observe) is a suggestion for the rest of the session. See
+ * used: no row of it existed to observe) is a suggestion for the rest of this VISIT to the
+ * console. The learning lives on this component instance and is deliberately not persisted:
+ * navigating away destroys it and the next visit re-derives the list from observation. See
  * {@link learnBrand}. Until hugmesh-wiki-bff-api#12 serves the authoritative list, this is
  * the closest the console gets: it can never be complete, and never claims to be.
  *
@@ -115,7 +132,12 @@ export class WikiAccessComponent implements OnInit {
   async loadBrands(): Promise<void> {
     this.brandsLoading.set(true);
     try {
-      this.brandOptions.set(await this.wiki.observedBrands());
+      const observed = await this.wiki.observedBrands();
+      // FOLD, never SET. {@link ngOnInit} fires this read WITHOUT awaiting it, so a
+      // write can be applied — and its server-stamped brand learnt — while the read
+      // is still outstanding. Replacing the list with the read's older snapshot would
+      // silently drop that brand, and nothing would tell the operator it had gone.
+      this.brandOptions.update((prev) => mergeBrands(prev, observed));
     } finally {
       this.brandsLoading.set(false);
     }
@@ -293,9 +315,7 @@ export class WikiAccessComponent implements OnInit {
     if (!this.showTargetDomain()) return;
     const brand = suggestableBrand(domain);
     if (!brand) return;
-    this.brandOptions.update((opts) =>
-      opts.includes(brand) ? opts : [...opts, brand].sort((a, b) => a.localeCompare(b)),
-    );
+    this.brandOptions.update((opts) => (opts.includes(brand) ? opts : mergeBrands(opts, [brand])));
   }
 
   /**

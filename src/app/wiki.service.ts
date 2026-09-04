@@ -350,8 +350,17 @@ export class WikiService {
   }
 
   /** DELETE /bff/wiki/admin/pages/{slug} → 204 no-content. The bff cascades to
-   *  the page's attachments and audits the removal; resolve = deleted. 404 when
-   *  the slug is not in the caller's brand. */
+   *  the page's attachments and audits the removal.
+   *
+   *  Resolving means the bff ACCEPTED the delete — NOT that a row was removed. It
+   *  answers 204 unconditionally, including when its DELETE matched nothing: the
+   *  SUPERADMIN path resolves the page cross-brand but scopes the DELETE to
+   *  `default` and discards the deleted-row count (hugmesh-wiki-bff-api#15). Both
+   *  delete surfaces therefore CONFIRM with a re-read rather than trusting this
+   *  resolution — `WikiPagesComponent#remove` re-reads the list,
+   *  `WikiPageViewComponent#remove` re-reads the page and decides on the row id.
+   *
+   *  404 when the slug is not in the caller's brand. */
   async deletePage(slug: string): Promise<void> {
     await this.content.wikiDeletePage({ slug }).catch((e) =>
       this.mapHttpError(e),

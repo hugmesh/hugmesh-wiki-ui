@@ -160,12 +160,17 @@ first write into a brand must always be typed. Every applied row comes back
 carrying its **server-stamped** `domain`, and for a SUPERADMIN cross-brand write
 the BFF only reaches the insert after validating that brand against its registry
 — so the returned brand is known-good, and `WikiAccessComponent#learnBrand`
-folds it into the datalist for the rest of the session. It learns what the
-server **stamped**, never what was typed: on a single-issuer cluster the BFF
-ignores the field and stamps `default`, and that must not become a suggestion,
-so the same `suggestableBrand` filter the observed union uses is applied here
-too. A write that FAILS teaches nothing — a 400 is precisely the server saying
-that brand does not exist.
+folds it into the datalist for the rest of **this visit to the console** — the
+learning lives on the component instance and is deliberately not persisted, so
+navigating away and back re-derives the list from observation alone. It learns
+what the server **stamped**, never what was typed: on a single-issuer cluster
+the BFF ignores the field and stamps `default`, and that must not become a
+suggestion, so the same `suggestableBrand` filter the observed union uses is
+applied here too. A write that FAILS teaches nothing — a 400 is precisely the
+server saying that brand does not exist. The observation read **folds** into the
+options rather than replacing them, because `ngOnInit` does not await it: a write
+applied while that read is still in flight would otherwise have its learnt brand
+clobbered when the read landed.
 
 An authoritative list still needs the BFF-side endpoint
 (hugmesh-wiki-bff-api issue #12); everything above is a subset by construction.
@@ -559,7 +564,14 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   the brand it still lives in, with the page left rendered); a *different* id is
   another brand's page that legally shares the slug, and therefore still a
   completed delete; and a re-read that fails at all is reported as
-  **unconfirmed** rather than as either outcome. Because the BFF runs the
+  **unconfirmed** rather than as either outcome — announced, but styled as a
+  warning and never opening with "Deleted", and a `403` (a permission boundary)
+  is worded differently from a transient failure worth retrying. The content
+  list applies the identical rule to its own unconfirmed ack. Identity only
+  decides when **both** rows actually carry an `id`: every generated model
+  property is optional, so an absent id is a re-read that proves nothing and is
+  reported as undecidable rather than compared (`undefined === undefined` would
+  otherwise announce a completed delete as a survivor). Because the BFF runs the
   attachment cascade *before* the page delete, a page that survives has already
   lost its attachments, so that path also re-reads the embedded attachments
   panel instead of leaving destroyed files listed. (See **BFF endpoints

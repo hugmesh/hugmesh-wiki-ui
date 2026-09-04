@@ -218,6 +218,104 @@ describe('WikiPageViewComponent (rendered page)', () => {
     expect(wiki.getPage).toHaveBeenCalledTimes(1);
   });
 
+  // An UNCONFIRMED removal is announced but must not READ or LOOK like a verified
+  // one — this surface exists to stop the bff's unconditional 204 being trusted, so
+  // it cannot itself assert a removal it did not verify.
+  it('renders an unconfirmed removal as a WARNING that never opens with "Deleted"', async () => {
+    verifyWith(() => Promise.reject(new WikiApiError(503, 'boom')) as Promise<WikiPage>);
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    const ack = el().querySelector('[data-testid="wiki-view-deleted"]')!;
+    expect(ack.classList.contains('wiki-warning')).withContext('not styled as a success').toBeTrue();
+    expect(ack.classList.contains('wiki-success')).toBeFalse();
+    expect(ack.getAttribute('role')).withContext('still announced').toBe('status');
+    expect(ack.textContent!.trim().startsWith('Deleted'))
+      .withContext('an unverified destructive action must not assert it happened')
+      .toBeFalse();
+    expect(ack.textContent).toContain('unconfirmed');
+  });
+
+  it('still renders a CONFIRMED removal as a success', async () => {
+    verifyWith(gone);
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    const ack = el().querySelector('[data-testid="wiki-view-deleted"]')!;
+    expect(ack.classList.contains('wiki-success')).toBeTrue();
+    expect(ack.classList.contains('wiki-warning')).toBeFalse();
+  });
+
+  it('tells a DENIED confirming re-read apart from a transient one', async () => {
+    // A 403 is a permission boundary; a 503 is worth retrying. Reporting them with
+    // the same sentence hides which of the two happened.
+    verifyWith(() => Promise.reject(new WikiApiError(403, 'no')) as Promise<WikiPage>);
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    const denied = el().querySelector('[data-testid="wiki-view-deleted"]')!.textContent!;
+    expect(denied).toContain('denied read access');
+    expect(denied).toContain('unconfirmed');
+
+    fixture = TestBed.createComponent(WikiPageViewComponent);
+    verifyWith(() => Promise.reject(new WikiApiError(503, 'boom')) as Promise<WikiPage>);
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    expect(el().querySelector('[data-testid="wiki-view-deleted"]')!.textContent)
+      .not.toContain('denied read access');
+  });
+
+  // Every property of a generated model is optional (springdoc emits no `required`
+  // list for a Java record) and getPage() casts onto the hand-written WikiPage, so
+  // `id` can be missing at runtime while the type says it cannot. `undefined ===
+  // undefined` would compare EQUAL and announce a completed delete as a survivor.
+  it('does not treat two ABSENT row ids as the same row', async () => {
+    wiki.getPage.and.callFake(() => Promise.resolve({ ...page(), id: undefined } as unknown as WikiPage));
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    const err = el().querySelector('[data-testid="wiki-view-action-error"]')!;
+    expect(err).withContext('undecidable, so warn — never ack from a phantom match').not.toBeNull();
+    expect(err.textContent).toContain('no row id');
+    expect(err.textContent).toContain('unconfirmed');
+    expect(err.textContent).not.toContain('undefined');
+    expect(el().querySelector('[data-testid="wiki-view-deleted"]'))
+      .withContext('nothing was proven, so nothing is acked')
+      .toBeNull();
+  });
+
+  it('will not decide by identity when only ONE side carries a row id', async () => {
+    // The dangerous half: an id on one side only makes `===` false, which reads as
+    // "a different row answers this slug" — a COMPLETED delete. Both sides must be
+    // identifiable before identity is allowed to decide anything.
+    let n = 0;
+    wiki.getPage.and.callFake(() =>
+      n++ === 0
+        ? Promise.resolve({ ...page(), id: undefined } as unknown as WikiPage)
+        : Promise.resolve(page({ id: '2' })),
+    );
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    expect(el().querySelector('[data-testid="wiki-view-deleted"]'))
+      .withContext('half an identity is not evidence of a completed delete')
+      .toBeNull();
+    expect(el().querySelector('[data-testid="wiki-view-action-error"]')!.textContent)
+      .toContain('no row id');
+  });
+
+  it('never names a brand as literally "undefined" in the survivor warning', async () => {
+    verifyWith(() => Promise.resolve({ ...page({ id: '1' }), domain: undefined } as unknown as WikiPage));
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    const err = el().querySelector('[data-testid="wiki-view-action-error"]')!.textContent!;
+    expect(err).toContain('was not removed');
+    expect(err).not.toContain('undefined');
+    expect(err).not.toContain('in brand');
+  });
+
   it('surfaces a 403 delete denial and keeps the page rendered', async () => {
     wiki.deletePage.and.rejectWith(new WikiApiError(403, 'no'));
     await armDelete();

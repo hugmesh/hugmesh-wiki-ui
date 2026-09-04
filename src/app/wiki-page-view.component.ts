@@ -9,6 +9,37 @@ import { sanitizeContentHtml } from './markdown';
 import { WikiAttachmentsComponent } from './wiki-attachments.component';
 
 /**
+ * Whether the confirming re-read can be decided by row IDENTITY at all.
+ *
+ * Every property of a generated model is optional (springdoc emits no `required`
+ * list for a Java record) and {@link WikiService.getPage} casts the payload onto
+ * the hand-written {@link WikiPage}, so `id` can be absent at runtime while the
+ * type says otherwise. `undefined === undefined` would then compare EQUAL and a
+ * genuinely-completed delete would be announced as a survivor. An absent id is a
+ * re-read that proves nothing, not a match.
+ *
+ * @param a - The page the re-read returned.
+ * @param b - The page that was deleted.
+ * @returns `true` only when BOTH carry a non-blank string id.
+ */
+function comparableById(a: WikiPage, b: WikiPage): boolean {
+  const ok = (v: unknown): boolean => typeof v === 'string' && v.trim().length > 0;
+  return ok(a.id) && ok(b.id);
+}
+
+/**
+ * Render " in brand X" for a survivor warning, or nothing when the brand is not
+ * a usable string — the same optional-property hazard as {@link comparableById}.
+ * Naming a brand as literally `undefined` would be worse than not naming one.
+ *
+ * @param domain - The row's server-stamped `domain`.
+ * @returns The clause to splice into the warning, possibly empty.
+ */
+function brandClause(domain: unknown): string {
+  return typeof domain === 'string' && domain.trim().length > 0 ? ` in brand ${domain.trim()}` : '';
+}
+
+/**
  * The page VIEW — GET /bff/wiki/pages/{slug} → WikiDto.Page; renders the
  * bff-rendered content_html (re-sanitized at the browser boundary, defence-in-
  * depth). Read-gated (wikiReadGuard: WIKI_READ). The Edit, Publish and Delete
@@ -69,6 +100,13 @@ export class WikiPageViewComponent implements OnInit {
    *  removal that could not be re-checked. Never a bare "Deleted". */
   readonly deletedMsg = signal('');
 
+  /** True when the confirming re-read could not be performed at all, so the removal
+   *  is neither proven nor refuted. The ack is then rendered as a WARNING and worded
+   *  "accepted … unconfirmed" — announcing an unverified destructive action in the
+   *  success style, opening with "Deleted", is exactly the trust this surface exists
+   *  to stop granting the bff's unconditional 204. */
+  readonly deleteUnconfirmed = signal(false);
+
   /** The embedded attachments panel, so a delete that did NOT remove the page can
    *  re-read it: the bff runs the attachment cascade BEFORE the page delete, so on
    *  that path the listed attachments are already destroyed and must not keep being
@@ -116,6 +154,7 @@ export class WikiPageViewComponent implements OnInit {
     this.confirmingDelete.set(false);
     this.deleted.set(false);
     this.deletedMsg.set('');
+    this.deleteUnconfirmed.set(false);
     try {
       this.page.set(await this.wiki.getPage(this.slug()));
     } catch (e) {
@@ -180,8 +219,13 @@ export class WikiPageViewComponent implements OnInit {
    *                                  already destroyed; the page stays rendered and
    *                                  the attachments panel is re-read, so nothing
    *                                  claims a page is gone while it is readable.
+   *   re-read 200, id ABSENT       → undecidable, and treated as a survivor rather
+   *                                  than as a match (see {@link comparableById}).
    *   re-read failed (not a 404)   → the DELETE was accepted but is unconfirmed;
-   *                                  say exactly that rather than assert either way.
+   *                                  say exactly that rather than assert either way,
+   *                                  as a WARNING and never opening with "Deleted",
+   *                                  and distinguish a 403 (a permission boundary)
+   *                                  from a transient failure worth retrying.
    *
    * On a failed DELETE the page is untouched and the reason is announced (403 =
    * role denied, 404 = already gone).
@@ -192,6 +236,10 @@ export class WikiPageViewComponent implements OnInit {
     this.deleting.set(true);
     this.error.set('');
     this.publishMsg.set('');
+    // The route param is the one slug guaranteed to be a string: every property of
+    // the generated model is optional and getPage() casts, so a payload field is
+    // never spliced into copy without a fallback (see {@link comparableById}).
+    const name = target.slug || this.slug();
     try {
       await this.wiki.deletePage(this.slug());
     } catch (e) {
@@ -201,26 +249,43 @@ export class WikiPageViewComponent implements OnInit {
     }
     try {
       const still = await this.wiki.getPage(this.slug());
-      if (still.id === target.id) {
-        this.page.set(still);
-        this.confirmingDelete.set(false);
-        this.error.set(
-          `The server accepted the delete but ${still.slug} still exists in brand ` +
-            `${still.domain} — it was not removed. Its attachments may already have been deleted.`,
+      if (!comparableById(still, target)) {
+        // Identity is the ENTIRE basis of the decision, so a re-read with no id
+        // proves nothing — it must not fall through to `===` and read as a match.
+        this.survived(
+          still,
+          `The server accepted the delete but ${name} is still readable, and the re-read ` +
+            `carried no row id to tell it from another brand's page — the removal is ` +
+            `unconfirmed. Its attachments may already have been deleted.`,
         );
-        void this.attachmentsPanel()?.reload(this.slug());
+      } else if (still.id === target.id) {
+        this.survived(
+          still,
+          `The server accepted the delete but ${name} still exists${brandClause(still.domain)} — ` +
+            `it was not removed. Its attachments may already have been deleted.`,
+        );
       } else {
         this.finishDeleted(
-          `Deleted ${target.slug} and its attachments. Another brand's page uses the ` +
+          `Deleted ${name} and its attachments. Another brand's page uses the ` +
             `same slug and is what this address now shows.`,
         );
       }
     } catch (e) {
       if (e instanceof WikiApiError && e.isNotFound) {
-        this.finishDeleted(`Deleted ${target.slug} and its attachments.`);
+        this.finishDeleted(`Deleted ${name} and its attachments.`);
+      } else if (e instanceof WikiApiError && e.isForbidden) {
+        // A permission boundary, not a transient failure — the two are worth
+        // telling apart, since only one of them is worth retrying.
+        this.finishDeleted(
+          `The delete of ${name} was accepted, but the page could not be re-read — the ` +
+            `server denied read access — so the removal is unconfirmed.`,
+          true,
+        );
       } else {
         this.finishDeleted(
-          `Deleted ${target.slug}. The page could not be re-read, so the removal is unconfirmed.`,
+          `The delete of ${name} was accepted, but the page could not be re-read, so the ` +
+            `removal is unconfirmed.`,
+          true,
         );
       }
     } finally {
@@ -229,15 +294,34 @@ export class WikiPageViewComponent implements OnInit {
   }
 
   /**
+   * The page outlived the delete (or could not be told apart from one that did):
+   * keep it rendered, warn, and re-read the attachments panel — the bff runs the
+   * attachment cascade BEFORE the page delete, so files listed there may already
+   * be destroyed and must not keep being shown as if they survived.
+   *
+   * @param still - The page the confirming re-read returned.
+   * @param msg - The warning copy, naming what is known and what is not.
+   */
+  private survived(still: WikiPage, msg: string): void {
+    this.page.set(still);
+    this.confirmingDelete.set(false);
+    this.error.set(msg);
+    void this.attachmentsPanel()?.reload(this.slug());
+  }
+
+  /**
    * Enter the deleted state: drop the page body (and with it the attachments
    * panel) and announce `msg`.
    *
    * @param msg - The ack copy for the live region; names what was verified.
+   * @param unconfirmed - `true` when the confirming re-read could not be made at
+   *   all, so the copy is rendered as a warning rather than as a success.
    */
-  private finishDeleted(msg: string): void {
+  private finishDeleted(msg: string, unconfirmed = false): void {
     this.confirmingDelete.set(false);
     this.page.set(null);
     this.deletedMsg.set(msg);
+    this.deleteUnconfirmed.set(unconfirmed);
     this.deleted.set(true);
   }
 

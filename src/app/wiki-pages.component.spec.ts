@@ -279,6 +279,56 @@ describe('WikiPagesComponent (content list)', () => {
         .toContain('could not be re-read');
     });
 
+    // Parity with the page view: an UNCONFIRMED removal is announced but styled as a
+    // warning and never opens with "Deleted". One destructive action, two surfaces —
+    // they must not draw opposite conclusions from the same unverified 204.
+    it('renders that unconfirmed ack as a WARNING that never opens with "Deleted"', async () => {
+      canWrite.set(true);
+      let call = 0;
+      wiki.listPages.and.callFake(() => {
+        call += 1;
+        return call === 1
+          ? Promise.resolve({ pages: [started, runbook] })
+          : Promise.reject(new WikiApiError(503, 'boom'));
+      });
+      await render();
+      await fixture.componentInstance.remove(started);
+      fixture.detectChanges();
+      const ack = el().querySelector('[data-testid="wiki-pages-notice"]')!;
+      expect(ack.classList.contains('wiki-warning')).toBeTrue();
+      expect(ack.classList.contains('wiki-success')).toBeFalse();
+      expect(ack.getAttribute('role')).withContext('still announced').toBe('status');
+      expect(ack.textContent!.trim().startsWith('Deleted')).toBeFalse();
+      expect(ack.textContent).toContain('unconfirmed');
+    });
+
+    it('still renders a CONFIRMED removal as a success', async () => {
+      canWrite.set(true);
+      listThenWithout('1');
+      await render();
+      await fixture.componentInstance.remove(started);
+      fixture.detectChanges();
+      const ack = el().querySelector('[data-testid="wiki-pages-notice"]')!;
+      expect(ack.classList.contains('wiki-success')).toBeTrue();
+      expect(ack.classList.contains('wiki-warning')).toBeFalse();
+    });
+
+    it('tells a DENIED confirming re-read apart from a transient one', async () => {
+      canWrite.set(true);
+      let call = 0;
+      wiki.listPages.and.callFake(() => {
+        call += 1;
+        return call === 1
+          ? Promise.resolve({ pages: [started, runbook] })
+          : Promise.reject(new WikiApiError(403, 'no'));
+      });
+      await render();
+      await fixture.componentInstance.remove(started);
+      fixture.detectChanges();
+      expect(el().querySelector('[data-testid="wiki-pages-notice"]')!.textContent)
+        .toContain('denied read access');
+    });
+
     it('does NOT call the bff for a non-writer, even on a programmatic confirm', async () => {
       canWrite.set(false);
       await render();
