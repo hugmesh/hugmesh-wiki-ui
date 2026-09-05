@@ -60,11 +60,24 @@ function brandClause(domain: unknown): string {
  * matters most: a SUPERADMIN reaches another brand's page BY viewing it, and the
  * cascade has already destroyed its attachments by the time the page survives.
  *
- * The re-read is exact here, not heuristic: `GET /bff/wiki/pages/{slug}` resolves
- * through the SAME `findBySlug(slug, scopeOf(auth))` the delete's own lookup used,
- * and {@link WikiPage} carries the row `id`, so the outcome is decided by identity
- * rather than by the slug — a *different* brand's page answering the same slug
- * (legal: `UNIQUE(domain, slug)`) is a completed delete, not a survivor.
+ * The re-read here decides on IDENTITY rather than on the slug, which the content
+ * list cannot do: `GET /bff/wiki/pages/{slug}` resolves through the SAME
+ * `findBySlug(slug, scopeOf(auth))` the delete's own lookup used, and
+ * {@link WikiPage} carries the row `id` — so a *different* brand's page answering
+ * the same slug (legal: `UNIQUE(domain, slug)`) is a completed delete, not a
+ * survivor.
+ *
+ * That is as strong as this endpoint allows, but it is not unconditional, and the
+ * copy on the "different id" path is worded as an observation for that reason. The
+ * SUPERADMIN resolution is `findFirstBySlugOrderByIdAsc` and row ids are
+ * DB-generated UUIDs, so id order is arbitrary rather than chronological: if a
+ * same-slug page is created in another brand with a LOWER id between this view's
+ * load and the confirm, the re-read returns that new row, the id differs, and a
+ * delete that removed nothing would read as completed. The window is narrow and the
+ * UI cannot close it — the bff exposes no get-page-by-id — so it is named here
+ * rather than papered over. Closing it needs hugmesh-wiki-bff-api#15 (stop
+ * answering 204 for a DELETE that matched no row), which removes the need for the
+ * re-read altogether.
  *
  * a11y: the page title is the h2; the rendered body is a labelled region; the
  * Publish/Delete actions announce their result in a role="status" live region
