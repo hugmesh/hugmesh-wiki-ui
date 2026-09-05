@@ -195,6 +195,31 @@ describe('WikiPagesComponent (content list)', () => {
           .toEqual(['a']);
       });
 
+      // REGRESSION (the OTHER direction, and the one the two specs above cannot
+      // see): the confirming re-read must decide by row ID, never by slug. Keying
+      // the survivor check on the slug reports a genuinely COMPLETED delete as
+      // "still listed — it may not have been removed" the moment another brand
+      // legally owns the same slug, which is exactly the confusion this round
+      // exists to kill. Neither sibling spec pins it: the confirm one asserts only
+      // pages() (set from the server re-read, independent of this check), and the
+      // fallback one exercises the catch-path filter, a different code site.
+      it('announces a SUCCESS when the row is gone but a cross-brand sibling keeps the slug', async () => {
+        canWrite.set(true);
+        listThenWithout('b', [brandA, brandB]);
+        await render();
+        await fixture.componentInstance.remove(brandB);
+        fixture.detectChanges();
+        const ack = el().querySelector('[data-testid="wiki-pages-notice"]')!;
+        expect(ack)
+          .withContext('the row we deleted is gone; the sibling is another brand\'s page')
+          .not.toBeNull();
+        expect(ack.classList.contains('wiki-success')).toBeTrue();
+        expect(ack.textContent!.trim().startsWith('Deleted')).toBeTrue();
+        expect(el().querySelector('[data-testid="wiki-pages-action-error"]'))
+          .withContext('a slug-keyed check would warn "still listed" about a completed delete')
+          .toBeNull();
+      });
+
       it('drops EXACTLY ONE row on the local fallback path too (re-read failed)', async () => {
         // The fallback drop is the one that is NOT server-authoritative, so it is
         // where a slug key would silently take the sibling with it.

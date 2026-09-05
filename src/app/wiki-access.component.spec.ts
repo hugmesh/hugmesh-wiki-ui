@@ -402,6 +402,38 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
         .toEqual(['branda', 'brandx']);
     });
 
+    it('folds a re-observed brand in ONCE when the read confirms what was just learnt', async () => {
+      // The overlap case, which is the LIKELY one: a write lands in brandx, the
+      // picker learns it, and the suggestion read then comes back reporting the
+      // very same brandx (its row is now observable). learnBrand's own
+      // `includes()` guard cannot cover this — the read folds through
+      // mergeBrands directly — so this is the only spec that exercises the
+      // de-duplication inside mergeBrands. Without it the datalist offers the
+      // same brand twice.
+      let landRead!: (brands: string[]) => void;
+      wiki.observedBrands.and.returnValue(
+        new Promise<string[]>((resolve) => {
+          landRead = resolve;
+        }),
+      );
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges(); // ngOnInit → loadBrands() now in flight
+
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      c.targetDomain.set('brandx');
+      wiki.grant.and.resolveTo(access({ domain: 'brandx' }));
+      await c.submit(); // learns brandx
+
+      landRead(['branda', 'brandx']); // ... and the read reports brandx too
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(options())
+        .withContext('a brand observed AND learnt is still one option')
+        .toEqual(['branda', 'brandx']);
+    });
+
     it('never learns a brand for a scoped ADMIN — the picker is not theirs to grow', async () => {
       // Defence-in-depth: the whole target-brand block is behind showTargetDomain(),
       // so a learnt brand could not be displayed to an ADMIN today. The role gate in

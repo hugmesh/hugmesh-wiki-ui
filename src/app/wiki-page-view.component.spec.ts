@@ -175,6 +175,21 @@ describe('WikiPageViewComponent (rendered page)', () => {
     expect(el().querySelector('[data-testid="wiki-view-title"]')).not.toBeNull();
   });
 
+  it('renders the row the confirming re-read returned, not the pre-delete snapshot', async () => {
+    // survived() keeps the page rendered — it must keep the FRESH row, because the
+    // warning beside it is built from that row. Rendering the stale snapshot while
+    // quoting the fresh one puts a version/brand on screen that disagrees with the
+    // sentence next to it, on the one path where the operator is being told the
+    // server did not do what it acknowledged.
+    verifyWith(() => Promise.resolve(page({ id: '1', domain: 'brandb', title: 'Renamed upstream' })));
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    expect(el().querySelector('[data-testid="wiki-view-title"]')!.textContent)
+      .withContext('the survivor is the row the re-read returned')
+      .toContain('Renamed upstream');
+  });
+
   it('re-reads the attachments when the delete did not remove the page', async () => {
     // The bff cascades to the attachments BEFORE deleting the page, so on that path
     // they are already destroyed — the panel must not keep listing them.
@@ -197,6 +212,13 @@ describe('WikiPageViewComponent (rendered page)', () => {
     expect(ack).not.toBeNull();
     expect(ack.textContent).toContain('same slug');
     expect(el().querySelector('[data-testid="wiki-view-action-error"]')).toBeNull();
+    // And it is a CONFIRMED removal, so it must READ like one: the re-read
+    // succeeded and proved the target gone. The sibling 'renders a CONFIRMED
+    // removal as a success' spec only ever exercises the 404 path, so nothing
+    // else stops this outcome drifting into the unconfirmed-warning styling.
+    expect(ack.classList.contains('wiki-success')).toBeTrue();
+    expect(ack.classList.contains('wiki-warning')).toBeFalse();
+    expect(ack.textContent!.trim().startsWith('Deleted')).toBeTrue();
   });
 
   it('says the removal is unconfirmed when the verifying re-read fails', async () => {
@@ -314,6 +336,30 @@ describe('WikiPageViewComponent (rendered page)', () => {
     expect(err).toContain('was not removed');
     expect(err).not.toContain('undefined');
     expect(err).not.toContain('in brand');
+  });
+
+  it('re-enables the delete controls so a failed delete can be RETRIED', async () => {
+    // `deleting` disables both the Delete button and the confirm button. Failing to
+    // clear it on the DELETE-failure path strands the console: the operator reads
+    // "Deleting…" forever and cannot retry without reloading the page. The 403 spec
+    // below asserts the message and the page, never that the control came back.
+    wiki.deletePage.and.rejectWith(new WikiApiError(503, 'boom'));
+    await armDelete();
+    el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!.click();
+    await settle();
+    const yes = el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete-confirm-yes"]')!;
+    expect(yes).withContext('the confirmation stays armed after a failure').not.toBeNull();
+    expect(yes.disabled).withContext('a failed delete must be retryable').toBeFalse();
+    expect(el().querySelector<HTMLButtonElement>('[data-testid="wiki-view-delete"]')!.disabled)
+      .toBeFalse();
+    // And a retry really does reach the bff again, and can still succeed.
+    wiki.deletePage.calls.reset();
+    wiki.deletePage.and.resolveTo();
+    wiki.getPage.and.rejectWith(new WikiApiError(404, 'gone'));
+    yes.click();
+    await settle();
+    expect(wiki.deletePage).toHaveBeenCalledTimes(1);
+    expect(el().querySelector('[data-testid="wiki-view-deleted"]')).not.toBeNull();
   });
 
   it('surfaces a 403 delete denial and keeps the page rendered', async () => {

@@ -557,9 +557,10 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   rather than by the status code, because the endpoint answers `204` even when
   its DELETE matched no row; if the page is still listed afterwards the operator
   is told so instead of being shown a success. **The page view applies the same
-  rule**, and can be exact about it: it re-reads `GET /bff/wiki/pages/{slug}`,
-  which resolves through the *same* server-side lookup the delete itself used,
-  and compares the row **`id`** — so a `404` is a confirmed removal; the same id
+  rule**, and can decide it by *identity* rather than by the slug: it re-reads
+  `GET /bff/wiki/pages/{slug}`, which resolves through the *same* server-side
+  lookup the delete itself used, and compares the row **`id`** — so a `404` is a
+  confirmed removal; the same id
   coming back is a page the DELETE left behind (announced as a warning naming
   the brand it still lives in, with the page left rendered); a *different* id is
   another brand's page that legally shares the slug, and therefore still a
@@ -574,8 +575,14 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   otherwise announce a completed delete as a survivor). Because the BFF runs the
   attachment cascade *before* the page delete, a page that survives has already
   lost its attachments, so that path also re-reads the embedded attachments
-  panel instead of leaving destroyed files listed. (See **BFF endpoints
-  consumed** above.)
+  panel instead of leaving destroyed files listed. Identity is the strongest
+  signal this endpoint offers, but it is not unconditional: the SUPERADMIN
+  resolution is `findFirstBySlugOrderByIdAsc` over DB-generated UUIDs, so id
+  order is arbitrary, and a same-slug page created in another brand with a lower
+  id *between* the load and the confirm would answer the re-read and read as a
+  completed delete. The window is narrow, the console cannot close it (the BFF
+  exposes no get-page-by-id), and the fix is upstream — see
+  `hugmesh-wiki-bff-api` issue #15 below. (See **BFF endpoints consumed** above.)
 - **Shipped — Opaque `bff_` session (no bearer in `localStorage`):**
   `bffToken` and the per-service access tokens are not part of `SnapSession`;
   `/bff/*` calls ride the HttpOnly `bff_` cookie and the gateway exchanges it
