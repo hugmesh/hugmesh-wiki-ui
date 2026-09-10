@@ -122,8 +122,10 @@ BFF picks that brand differs by role, and the console follows it exactly:
   known `targetDomain` and **fails closed with a 400** without one — a stamp of
   `default` would otherwise land the row somewhere the guard can never match
   it, producing a grant/ban that silently has no effect. The console shows a
-  **Target brand** field to a SUPERADMIN for this reason: without it,
-  grant/timeout/ban is unusable for them on a multi-brand cluster.
+  **Target brand** control to a SUPERADMIN for this reason: without it,
+  grant/timeout/ban is unusable for them on a multi-brand cluster. Which control —
+  and whether one is shown at all — is decided by what the BFF's brand catalogue
+  says; see below.
 
 The field is sent only when filled. Left blank, the request body is unchanged
 from before — correct on a single-issuer cluster, where every principal is
@@ -133,47 +135,83 @@ message is surfaced verbatim (it names the field to fix). The applied result
 echoes the brand the row actually landed in, so a cross-brand write can be
 confirmed rather than assumed.
 
-**The field is a combobox, not free text — and not a `<select>` either.** The
-BFF serves no known-brands endpoint, so the console cannot enumerate the
-registry. What it *can* do is observe: the two SUPERADMIN cross-domain reads it
-already makes (`GET /bff/wiki/superadmin/access` and
-`GET /bff/wiki/superadmin/audit`) each carry the row's server-stamped `domain`.
-`WikiService#observedBrands` unions those into the datalist behind the field, so
-a brand that has any access override or any recent content edit is one click
-away instead of one typo away. That union is a **subset** of the registry — a
-brand with neither is invisible to it — so the input stays typeable and the
-BFF's 400 remains the authority. The union is also **filtered**: rows can
-legitimately carry the BFF's `default` back-compat sentinel (its
-`WikiAuditLogRepository#record` stamps a SUPERADMIN's own null scope as
-`default`, so every page a SUPERADMIN edits — or deletes from the list — writes
-one) or the fail-closed `__deny__` scope, and `DomainRegistry#isKnownDomain`
-rejects both outright, so a write targeting either always 400s. Suggesting them
-would hand the operator a guaranteed-rejected pick from a list whose whole
-purpose is the opposite, so `WikiService#DOMAIN_SENTINELS` drops them; a cluster
-whose only observed brand is `default` correctly shows *no* suggestions. `observedBrands` deliberately never rejects:
-if either read is denied or fails, the operator simply gets fewer suggestions
-(or none) rather than an error they cannot act on.
+**The field is a real picker now.** The BFF serves the list it validates against —
+`GET /bff/wiki/superadmin/brands` (hugmesh-wiki-bff-api#12) returns
+`DomainRegistry.knownDomains()` filtered through the very predicate
+`WikiAccessService.writeDomain` checks a submitted brand with — so every option is one the
+server accepts **by construction**, not merely one it is likely to accept. The one rule
+behind everything below: **never offer a brand the server will not honour.** A picker whose
+choice is silently discarded is worse than no picker, because the operator believes they
+targeted brand X and the row lands somewhere else.
 
-The suggestions also **learn from what is applied**. Observation has an
-unavoidable blind spot: a brand cannot be observed until it *has* a row, so the
-first write into a brand must always be typed. Every applied row comes back
-carrying its **server-stamped** `domain`, and for a SUPERADMIN cross-brand write
-the BFF only reaches the insert after validating that brand against its registry
-— so the returned brand is known-good, and `WikiAccessComponent#learnBrand`
-folds it into the datalist for the rest of **this visit to the console** — the
-learning lives on the component instance and is deliberately not persisted, so
-navigating away and back re-derives the list from observation alone. It learns
-what the server **stamped**, never what was typed: on a single-issuer cluster
-the BFF ignores the field and stamps `default`, and that must not become a
-suggestion, so the same `suggestableBrand` filter the observed union uses is
-applied here too. A write that FAILS teaches nothing — a 400 is precisely the
-server saying that brand does not exist. The observation read **folds** into the
-options rather than replacing them, because `ngOnInit` does not await it: a write
-applied while that read is still in flight would otherwise have its learnt brand
-clobbered when the read landed.
+What the catalogue says decides which of five shapes the control takes
+(`WikiAccessComponent`'s `BrandMode`):
 
-An authoritative list still needs the BFF-side endpoint
-(hugmesh-wiki-bff-api issue #12); everything above is a subset by construction.
+| catalogue | control | why |
+| --- | --- | --- |
+| still loading | none, just "Loading the brands this server accepts…" | a free-text box that turns into a closed select underneath a half-typed value is how a typed brand gets silently discarded |
+| `targetDomainHonoured: true` | a closed `<select>` over `brands` | the list is the server's own and complete |
+| `targetDomainHonoured: false`, `brands` empty | none, one line of explanation | single-issuer deployment: every principal is `default`, so a SUPERADMIN write stamped `default` is *correct* and there is nothing to choose |
+| `targetDomainHonoured: false`, `brands` non-empty | none, a **warning** naming the brand | the hazard below |
+| the read failed | the previous combobox over observed brands | losing the control entirely would leave a SUPERADMIN unable to act |
+
+The picker is **preselected to the domain the wiki is launched on** (`launchDomain`, the
+same derivation the BFF's 007 re-stamp target uses, falling back to `hugmesh`) — but only
+when that value is one of the offered brands. On a 2+-brand deployment there is no single
+launch domain and the BFF reports its fallback instead, so preselecting it blindly would
+preselect a guaranteed 400. An operator's own pick always outranks the default. When the
+picker is live it is also **required**, which catches the BFF's fail-closed 400 before the
+round-trip rather than after it.
+
+**The warning case is a real defect on the server, not a UI nicety.** The BFF reads
+`targetDomain` only when `DomainRegistry.isMultiIssuer()`, which is *two or more*
+configured issuer pairs. With **exactly one** (`app.tenancy.issuers=https://id=hugmesh`)
+its users resolve `hugmesh` while a SUPERADMIN's grant or ban is stamped `default`, so
+`WikiAccessGuard` — which reads back `activeFor(subject, "hugmesh")` — never matches it:
+the ban silently does nothing. That is filed as **hugmesh-wiki-bff-api#21**. Until it is
+decided, the console refuses to render a control there and says why, and
+`WikiAccessComponent#submit` does not send `targetDomain` in either inert mode — a body
+carrying a brand the server discards would make an audit log read as a targeted write.
+
+**The fallback keeps the old behaviour, unchanged.** If the catalogue read is denied or
+fails, the field degrades to what it was before that endpoint existed: a datalist combobox
+whose suggestions come from observation. The two SUPERADMIN cross-domain reads the console
+already makes (`GET /bff/wiki/superadmin/access` and `GET /bff/wiki/superadmin/audit`) each
+carry the row's server-stamped `domain`, and `WikiService#observedBrands` unions those. That
+union is a **subset** of the registry — a brand with neither an override nor a recent edit is
+invisible to it — so the input stays typeable there and the BFF's 400 remains the authority.
+The union is also **filtered**: rows can legitimately carry the BFF's `default` back-compat
+sentinel (its `WikiAuditLogRepository#record` stamps a SUPERADMIN's own null scope as
+`default`, so every page a SUPERADMIN edits — or deletes from the list — writes one) or the
+fail-closed `__deny__` scope, and `DomainRegistry#isKnownDomain` rejects both outright, so a
+write targeting either always 400s. Suggesting them would hand the operator a
+guaranteed-rejected pick from a list whose whole purpose is the opposite, so
+`WikiService#DOMAIN_SENTINELS` drops them; a cluster whose only observed brand is `default`
+correctly shows *no* suggestions. The same filter is applied to the catalogue's own `brands`,
+which is defence in depth rather than duplication: the server already filters, but a
+server-side regression that started emitting `default` must not reach the picker.
+`observedBrands` deliberately never rejects — fewer suggestions, never an error the operator
+cannot act on — whereas `brandCatalog` **does** reject, because "the server denied the
+catalogue" and "the server says there are no brands" are different facts the console renders
+differently.
+
+In that fallback the suggestions also **learn from what is applied**. Observation has an
+unavoidable blind spot: a brand cannot be observed until it *has* a row, so the first write
+into a brand must always be typed. Every applied row comes back carrying its
+**server-stamped** `domain`, and for a SUPERADMIN cross-brand write the BFF only reaches the
+insert after validating that brand against its registry — so the returned brand is
+known-good, and `WikiAccessComponent#learnBrand` folds it into the datalist for the rest of
+**this visit to the console** — the learning lives on the component instance and is
+deliberately not persisted, so navigating away and back re-derives the list. It learns what
+the server **stamped**, never what was typed: on a single-issuer cluster the BFF ignores the
+field and stamps `default`, and that must not become a suggestion, so the same
+`suggestableBrand` filter is applied here too. A write that FAILS teaches nothing — a 400 is
+precisely the server saying that brand does not exist. The observation read **folds** into
+the options rather than replacing them, because `ngOnInit` does not await it: a write applied
+while that read is still in flight would otherwise have its learnt brand clobbered when the
+read landed. Learning stops once the catalogue has *answered* — folding into a complete list
+could only add something the server deliberately left out — but not while it is still in
+flight, because refusing then would make the answer depend on microtask ordering.
 
 ## BFF endpoints consumed (`/bff/wiki/**`)
 
@@ -206,6 +244,9 @@ ng-openapi-gen clients (see **Typed API client** below). Auth rides the
 - `GET  /bff/wiki/superadmin/access/{userSubject}/history` → full history
 - `GET  /bff/wiki/superadmin/audit[?limit=N]` → content audit trail (newest
   first; `limit` bounded to `[1, 1000]`, default 200)
+- `GET  /bff/wiki/superadmin/brands` → the target-brand catalogue: the brands the BFF
+  accepts as a `targetDomain`, the domain this wiki is launched on, and whether it reads
+  `targetDomain` at all (see **the cross-brand target** above)
 
 Every `/bff/*` call is sent with credentials (`withCredentials: true`, set by
 `auth.interceptor.ts`) and the gateway's `BffCookieToBearerWebFilter` mints the

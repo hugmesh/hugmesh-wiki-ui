@@ -26,6 +26,15 @@ Feature: SUPERADMIN cross-brand targetDomain — the grant lands in the named br
     And "superadmin" sees the access result brand "domain-b"
     And "reader-domain-b"'s wiki read succeeds at the BFF
 
+  # NEEDS REWORK, and not verifiable from a workstation: this scenario predates the brand
+  # PICKER (hugmesh-wiki-ui#3 / hugmesh-wiki-bff-api#12). On a multi-brand stack the target
+  # control is now a CLOSED <select> whose options are exactly what the bff accepts, so an
+  # unknown brand cannot be chosen and the server's fail-closed 400 is no longer reachable
+  # from this screen — `selectOption` will fail instead. The behaviour it asserts is not
+  # gone: it is now (a) covered against a mock by wiki-access.component.spec.ts, and (b)
+  # still reachable through the free-text FALLBACK the console renders when the catalogue
+  # read fails. Whoever next runs the @cluster lane should either re-point it at that
+  # fallback or replace it with "an unknown brand is not offered at all".
   Scenario: a superadmin grant naming an unknown brand is rejected verbatim (fail-closed 400)
     Given "superadmin" is logged in in their own context
     When "superadmin" navigates to "/wiki/access"

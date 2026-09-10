@@ -2,10 +2,37 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
-import { WikiService, WikiAccess, WikiApiError, suggestableBrand } from './wiki.service';
+import { WikiService, WikiAccess, WikiApiError, suggestableBrand, BrandCatalog } from './wiki.service';
 import { SessionService } from './session.service';
 
 type AccessAction = 'grant' | 'timeout' | 'ban';
+
+/**
+ * How the target-brand control should render — decided by what the bff's brand catalogue
+ * says, never guessed. The rule the whole type exists to keep: **never offer a brand the
+ * server will not honour**, because a picker whose choice is discarded is worse than no
+ * picker (the operator believes they targeted brand X and the row lands elsewhere,
+ * silently).
+ *
+ * - `loading` — the catalogue read is in flight. The control is NOT rendered yet: showing a
+ *   free-text box that turns into a closed select underneath a half-typed value is how a
+ *   typed brand gets silently discarded.
+ * - `picker` — the catalogue answered and the bff DOES consult `targetDomain`. A closed
+ *   `<select>` over the authoritative list, preselected to the launch domain when that is
+ *   one of the options, and required (the bff 400s a SUPERADMIN write with no brand).
+ * - `inert` — the bff ignores `targetDomain` and has no brands to offer: a single-issuer
+ *   deployment, where every principal is `default` and a SUPERADMIN write stamped `default`
+ *   is CORRECT. Nothing to choose, so nothing is rendered but a one-line explanation.
+ * - `inert-mismatch` — the bff ignores `targetDomain` but DOES have a real brand. That is
+ *   the exactly-one-configured-issuer shape: users resolve that brand while a SUPERADMIN
+ *   write is stamped `default`, so the change silently never applies
+ *   (hugmesh-wiki-bff-api#21). A control here would be a lie in both directions, so the
+ *   console warns instead of offering one.
+ * - `observed` — the catalogue read FAILED. Falls back to the previous behaviour: a
+ *   combobox over the brands this console can observe. Strictly a subset, so the field
+ *   stays typeable and the bff's 400 stays the gate.
+ */
+type BrandMode = 'loading' | 'picker' | 'inert' | 'inert-mismatch' | 'observed';
 
 /**
  * Union two brand-suggestion lists into one sorted, de-duplicated list.
@@ -45,20 +72,32 @@ function mergeBrands(a: readonly string[], b: readonly string[]): string[] {
  * PR #39). The field is therefore rendered ONLY for a SUPERADMIN, and sent only when
  * filled: left blank it reproduces the previous behaviour exactly (fine on a
  * single-issuer cluster, where the bff ignores the field and keeps `default`).
- * The field is a COMBOBOX, not free text: it offers the brands this console can observe
- * (see {@link brandOptions}) while still accepting a typed value. It cannot be a closed
- * select — the bff serves no known-brands endpoint, so the suggestions are a SUBSET of its
- * trusted DomainRegistry and a brand with no observable row would otherwise be untypeable.
- * The bff therefore stays the authority: it validates the value against the registry and a
- * 400 is surfaced verbatim, so an unknown brand is still caught server-side.
- * The suggestions also LEARN: every applied row comes back with its server-stamped
- * `domain`, and for a SUPERADMIN write the bff reached the insert only by validating that
- * brand against the registry — so a brand typed once (necessarily, the first time it is
- * used: no row of it existed to observe) is a suggestion for the rest of this VISIT to the
- * console. The learning lives on this component instance and is deliberately not persisted:
- * navigating away destroys it and the next visit re-derives the list from observation. See
- * {@link learnBrand}. Until hugmesh-wiki-bff-api#12 serves the authoritative list, this is
- * the closest the console gets: it can never be complete, and never claims to be.
+ * The control is now a real PICKER, because the bff finally serves the list it validates
+ * against: `GET /bff/wiki/superadmin/brands` (hugmesh-wiki-bff-api#12) returns
+ * `DomainRegistry.knownDomains()` filtered through the very predicate `writeDomain` calls,
+ * so every option is accepted BY CONSTRUCTION rather than merely likely. What the catalogue
+ * says decides how the control renders — see {@link BrandMode}, and the one rule behind all
+ * five of its cases: NEVER OFFER A BRAND THE SERVER WILL NOT HONOUR. A picker whose choice
+ * is silently discarded is worse than no picker at all.
+ *
+ * That rule is why two of the modes render no control. The bff reads `targetDomain` only
+ * when two or more issuers are configured; below that a SUPERADMIN write is stamped
+ * `default` whatever the body said. With exactly one configured issuer that is a live
+ * hazard rather than a harmless no-op (users resolve the configured brand, the write lands
+ * in `default`, and the read guard never matches it — hugmesh-wiki-bff-api#21), so the
+ * console warns instead of offering a control.
+ *
+ * The picker is PRESELECTED to the domain the wiki is launched on, per the operator's
+ * steer that the wiki follows the domain it is launched on — but only when the server would
+ * accept that value, because on a 2+-brand deployment there is no single launch domain and
+ * the bff reports its `hugmesh` fallback instead.
+ *
+ * If the catalogue read FAILS the field degrades to what it was before the endpoint
+ * existed: a datalist COMBOBOX over the brands this console can observe
+ * (see {@link brandOptions}), which is a strict SUBSET of the registry — so it stays
+ * typeable, the bff's 400 stays the real gate, and the suggestions LEARN from the
+ * server-stamped `domain` of every applied row (see {@link learnBrand}). Losing the control
+ * entirely on a denied or flaky read would leave a SUPERADMIN unable to act at all.
  *
  * a11y: a labelled fieldset for the action form; each control has a <label> +
  * aria-describedby help; the result/error is announced (role="status"/"alert");
@@ -92,14 +131,24 @@ export class WikiAccessComponent implements OnInit {
    *  authoritative and ignores the field for a scoped ADMIN regardless). */
   readonly showTargetDomain = this.session.canManage;
 
-  /** Brand suggestions for the target-brand combobox — the brands observable from
-   *  the SUPERADMIN cross-domain reads (WikiService.observedBrands). A SUBSET of the
-   *  bff's DomainRegistry, so the control stays typeable; empty is a valid state
-   *  (nothing observed yet, or the reads were denied) and is NOT an error. */
+  /** The brands offered for the target-brand control. In {@link BrandMode} `picker` these
+   *  are AUTHORITATIVE (the bff's own registry, every one of them accepted by construction);
+   *  in `observed` they are suggestions only — a SUBSET of that registry, which is why that
+   *  mode keeps the control typeable. Empty is a valid state in both and is NOT an error. */
   readonly brandOptions = signal<readonly string[]>([]);
 
-  /** True while the suggestion reads are in flight (the field stays usable). */
+  /** True while the catalogue read is in flight. */
   readonly brandsLoading = signal(false);
+
+  /** How the target-brand control renders — see {@link BrandMode}. Starts `loading` so the
+   *  control is not rendered before the server has said which kind of control is honest. */
+  readonly brandMode = signal<BrandMode>('loading');
+
+  /** The brand this wiki is LAUNCHED on, as the bff derives it (the same derivation its 007
+   *  re-stamp target uses, falling back to `hugmesh`). Used to preselect the picker — but
+   *  only when it is one of {@link brandOptions}: on a 2+-brand deployment there is no single
+   *  launch domain and the bff reports its fallback, which is not a targetable brand. */
+  readonly launchDomain = signal<string | null>(null);
 
   readonly busy = signal(false);
   readonly error = signal('');
@@ -114,33 +163,86 @@ export class WikiAccessComponent implements OnInit {
   ];
 
   /**
-   * Load the target-brand suggestions — ONLY for a SUPERADMIN, the only role the
-   * field is rendered for and the only role the cross-domain source reads admit.
-   * A scoped ADMIN never fires them (they would 403, and the field is inert for
-   * them anyway).
+   * Load the brand catalogue — ONLY for a SUPERADMIN, the only role the field is rendered
+   * for and the only role the endpoint admits. A scoped ADMIN never fires it (it would 403,
+   * and the field is inert for them anyway: the bff derives their brand from their JWT and
+   * ignores any body-supplied domain).
    */
   ngOnInit(): void {
     if (this.showTargetDomain()) void this.loadBrands();
   }
 
   /**
-   * Fetch the observable brands for the combobox datalist.
-   * Never surfaces an error: {@link WikiService.observedBrands} resolves to an
-   * empty list rather than rejecting, and the field is fully usable as free text
-   * with no suggestions at all.
+   * Fetch the AUTHORITATIVE brand catalogue and decide how the control renders, falling back
+   * to the observed suggestions when that read fails.
+   *
+   * The failure branch is not a formality. Without it a denied or flaky catalogue read would
+   * leave a SUPERADMIN with no control at all and no way to act; with it the field is exactly
+   * what it was before the endpoint existed — a typeable combobox whose suggestions are a
+   * subset, with the bff's 400 as the real gate.
    */
   async loadBrands(): Promise<void> {
     this.brandsLoading.set(true);
     try {
-      const observed = await this.wiki.observedBrands();
-      // FOLD, never SET. {@link ngOnInit} fires this read WITHOUT awaiting it, so a
-      // write can be applied — and its server-stamped brand learnt — while the read
-      // is still outstanding. Replacing the list with the read's older snapshot would
-      // silently drop that brand, and nothing would tell the operator it had gone.
-      this.brandOptions.update((prev) => mergeBrands(prev, observed));
+      this.applyCatalog(await this.wiki.brandCatalog());
+    } catch {
+      // A 403 (not a SUPERADMIN) or a transient failure — NOT "the server says there are
+      // no brands", which is a 200 with an empty list and is handled above.
+      await this.loadObservedBrands();
     } finally {
       this.brandsLoading.set(false);
     }
+  }
+
+  /**
+   * Turn a catalogue into a render mode, applying the one rule this component exists to
+   * keep: never offer a brand the server will not honour.
+   *
+   * @param catalog - The bff's answer; see {@link BrandCatalog}.
+   */
+  private applyCatalog(catalog: BrandCatalog): void {
+    this.launchDomain.set(catalog.launchDomain);
+    this.brandOptions.set(catalog.brands);
+
+    if (!catalog.targetDomainHonoured) {
+      // The bff does not read `targetDomain` at all below two configured issuers — a
+      // SUPERADMIN write is stamped `default` whatever the body says. Rendering a control
+      // would promise something the server discards, so render none, and clear anything
+      // already typed so a stale value cannot be sent under the impression it did something.
+      this.targetDomain.set('');
+      this.brandMode.set(catalog.brands.length > 0 ? 'inert-mismatch' : 'inert');
+      return;
+    }
+
+    this.brandMode.set('picker');
+    // Preselect the launch domain — the operator's steer is that the wiki follows the domain
+    // it is launched on — but ONLY when the server would accept it. On a 2+-brand deployment
+    // there is no single launch domain and the bff reports its `hugmesh` fallback, which is
+    // not necessarily a configured brand; preselecting it there would preselect a guaranteed
+    // 400. An operator's own pick always wins over the default.
+    const chosen = this.targetDomain().trim();
+    if (chosen && catalog.brands.includes(chosen)) return;
+    const launch = catalog.launchDomain;
+    this.targetDomain.set(launch !== null && catalog.brands.includes(launch) ? launch : '');
+  }
+
+  /**
+   * The FALLBACK source: the brands this console can observe from the two SUPERADMIN
+   * cross-domain reads. Never surfaces an error — {@link WikiService.observedBrands} resolves
+   * to an empty list rather than rejecting, and the field is fully usable as free text with
+   * no suggestions at all.
+   */
+  private async loadObservedBrands(): Promise<void> {
+    // Mode FIRST, then the read: the fallback was decided the moment the catalogue read
+    // failed, so the combobox should be on screen and usable while its suggestions load —
+    // not hidden behind the loading placeholder until they arrive.
+    this.brandMode.set('observed');
+    const observed = await this.wiki.observedBrands();
+    // FOLD, never SET. {@link ngOnInit} fires this read WITHOUT awaiting it, so a write can
+    // be applied — and its server-stamped brand learnt — while the read is still outstanding.
+    // Replacing the list with the read's older snapshot would silently drop that brand, and
+    // nothing would tell the operator it had gone.
+    this.brandOptions.update((prev) => mergeBrands(prev, observed));
   }
 
   /**
@@ -187,14 +289,33 @@ export class WikiAccessComponent implements OnInit {
   }
 
   /**
+   * Whether the target-brand picker should show its `aria-invalid` indicator.
+   *
+   * Only in {@link BrandMode} `picker`: that is the mode in which the bff has told us it
+   * WILL read `targetDomain`, and `WikiAccessService.writeDomain` fails closed with a 400
+   * when a SUPERADMIN names no brand there. Every other mode either does not render the
+   * control or cannot know the value is required, so requiring one would block a write the
+   * server would have accepted.
+   *
+   * @returns `true` when the picker is live, touched, and no brand is selected.
+   */
+  targetInvalid(): boolean {
+    return this.brandMode() === 'picker' && this.touched()
+      && this.targetDomain().trim().length === 0;
+  }
+
+  /**
    * Whether the form is valid and may be submitted.
    *
-   * @returns `true` when the user subject is non-empty, and — for timeout —
-   *   the hours value is positive.
+   * @returns `true` when the user subject is non-empty, — for timeout — the hours value is
+   *   positive, and — when the brand picker is live — a target brand is selected.
    */
   formValid(): boolean {
     if (this.userSubject().trim().length === 0) return false;
     if (this.action() === 'timeout' && !(this.timeoutHours() > 0)) return false;
+    // Catch the fail-closed 400 before the round-trip, but ONLY where the server told us it
+    // reads the field. See targetInvalid().
+    if (this.brandMode() === 'picker' && this.targetDomain().trim().length === 0) return false;
     return true;
   }
 
@@ -217,7 +338,16 @@ export class WikiAccessComponent implements OnInit {
     // Only a SUPERADMIN can target another brand, and only a non-blank value is
     // sent: omitting the key entirely (rather than sending an empty/undefined one)
     // keeps the wire body byte-identical to the previous behaviour when unused.
-    const target = this.showTargetDomain() ? this.targetDomain().trim() : '';
+    // The mode gate is the second half of the same rule the picker enforces, and it is a
+    // DENY-list on purpose: send unless the bff has TOLD us it discards the field. In the two
+    // INERT modes it has, and a body carrying a brand the server discards invites the reader
+    // of an audit log to believe the write was targeted when it was not. Everywhere else —
+    // including before the catalogue has answered — the previous behaviour is unchanged, so
+    // an unread catalogue can never cost a legitimate cross-brand write.
+    const brandIsDiscarded =
+      this.brandMode() === 'inert' || this.brandMode() === 'inert-mismatch';
+    const target =
+      this.showTargetDomain() && !brandIsDiscarded ? this.targetDomain().trim() : '';
     const brand = target ? { targetDomain: target } : {};
     try {
       let row: WikiAccess;
@@ -313,6 +443,15 @@ export class WikiAccessComponent implements OnInit {
    */
   private learnBrand(domain: unknown): void {
     if (!this.showTargetDomain()) return;
+    // Only while the observed fallback is — or may still become — the source. Once the
+    // catalogue has ANSWERED there is nothing to learn: in `picker` mode the list is the
+    // server's own registry and already complete, so folding a row's brand in could only add
+    // something the catalogue deliberately left out; in the inert modes the row is stamped
+    // `default` (which suggestableBrand drops) and there is no control to grow. `loading` is
+    // deliberately NOT excluded — ngOnInit does not await the read, so a write can land
+    // first, and refusing to learn then would depend on microtask ordering for its answer.
+    const decided = this.brandMode();
+    if (decided === 'picker' || decided === 'inert' || decided === 'inert-mismatch') return;
     const brand = suggestableBrand(domain);
     if (!brand) return;
     this.brandOptions.update((opts) => (opts.includes(brand) ? opts : mergeBrands(opts, [brand])));

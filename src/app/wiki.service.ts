@@ -7,6 +7,7 @@ import { CreatePage as CreatePageModel } from './api/models/create-page';
 import { UpdatePage as UpdatePageModel } from './api/models/update-page';
 import { AuditEntry as AuditEntryModel } from './api/models/audit-entry';
 import { AuditList as AuditListModel } from './api/models/audit-list';
+import { Brands as BrandsModel } from './api/models/brands';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -205,6 +206,28 @@ export function suggestableBrand(v: unknown): string | null {
   if (typeof v !== 'string') return null;
   const brand = v.trim();
   return brand.length > 0 && !DOMAIN_SENTINELS.includes(brand) ? brand : null;
+}
+
+/**
+ * The bff's BRAND CATALOGUE — the authoritative answer to "which brands may a SUPERADMIN
+ * cross-brand write name?", from `GET /bff/wiki/superadmin/brands`
+ * (hugmesh-wiki-bff-api#12). This is the NORMALISED form: every property of the generated
+ * model is optional (springdoc emits no `required` list for a Java record), and a picker
+ * cannot be built on maybes.
+ *
+ * The three fields answer three different questions and are NOT interchangeable — see
+ * {@link WikiService.brandCatalog}.
+ */
+export interface BrandCatalog {
+  /** Every value the bff will ACCEPT as a `targetDomain`, sorted. Possibly empty. */
+  readonly brands: readonly string[];
+  /** The brand this wiki is launched on. `null` only if the server omitted it. NOT
+   *  necessarily a member of {@link brands} — check before preselecting. */
+  readonly launchDomain: string | null;
+  /** Whether the bff consults `targetDomain` at all. False on a deployment with fewer
+   *  than two configured issuers, where a SUPERADMIN write is stamped `default`
+   *  regardless of what the body said. */
+  readonly targetDomainHonoured: boolean;
 }
 
 /** A typed error the service raises so components can surface the EXACT failure
@@ -492,13 +515,67 @@ export class WikiService {
     return this.content.wikiAuditTrail({ limit }).catch((e) => this.mapHttpError(e));
   }
 
+  // ----- BRAND CATALOGUE (WIKI_MANAGE = SUPERADMIN) ----------------------
+
+  /**
+   * GET /bff/wiki/superadmin/brands → the AUTHORITATIVE brand catalogue.
+   *
+   * This is what makes a real picker possible. Every entry in `brands` was produced by
+   * running the bff's own `DomainRegistry.knownDomains()` through
+   * `DomainRegistry.isKnownDomain` — the SAME predicate `WikiAccessService.writeDomain`
+   * validates a submitted `targetDomain` with — so an offered brand is one the server
+   * accepts BY CONSTRUCTION, and the values it always rejects (`default`, blank) cannot
+   * appear. That is the whole difference from {@link observedBrands}, which can only see
+   * brands that already have a row.
+   *
+   * `targetDomainHonoured` is not decoration: the bff reads `targetDomain` only when two
+   * or more issuers are configured. Below that a SUPERADMIN write is stamped `default`
+   * whatever the picker chose, so a caller that ignored this field would offer a choice
+   * the server discards.
+   *
+   * `launchDomain` is the brand the wiki is launched on (the same derivation the bff's
+   * 007 re-stamp target uses, falling back to `hugmesh`). It is deliberately NOT
+   * guaranteed to be in `brands`: on a 2+-brand deployment there is no single launch
+   * domain and the fallback comes back instead, so a caller must check membership before
+   * preselecting it.
+   *
+   * Unlike {@link observedBrands} this DOES reject — a 403 (not a SUPERADMIN) or a
+   * transient failure is a real difference from "the server says there are no brands",
+   * and the console renders those two outcomes differently.
+   *
+   * @returns The normalised catalogue; blank/sentinel entries are filtered through
+   *   {@link suggestableBrand} so a malformed row can never become a rendered option.
+   * @throws WikiApiError on any non-2xx.
+   */
+  async brandCatalog(): Promise<BrandCatalog> {
+    const raw: BrandsModel = await this.access.wikiAccessBrands().catch((e) =>
+      this.mapHttpError(e),
+    );
+    // Coerce, do not trust: every generated property is optional, and the shared
+    // suggestableBrand filter is applied here too so this source cannot offer something
+    // observedBrands would have refused to (a server-side regression that started
+    // emitting `default` must not become a guaranteed-400 option).
+    const brands = (raw.brands ?? [])
+      .map((b) => suggestableBrand(b))
+      .filter((b): b is string => b !== null);
+    const launch = suggestableBrand(raw.launchDomain);
+    return {
+      brands,
+      launchDomain: launch,
+      targetDomainHonoured: raw.targetDomainHonoured === true,
+    };
+  }
+
   // ----- BRAND SUGGESTIONS (WIKI_MANAGE = SUPERADMIN) ---------------------
   //
-  // The wiki-bff exposes NO known-brands endpoint: the authoritative list lives
-  // in its DomainRegistry (issuer -> brand, seeded from app.tenancy.issuers) and
-  // is never served. Until it is (hugmesh-wiki-bff-api issue #12), the closest
-  // honest source is OBSERVATION: the two SUPERADMIN cross-domain reads this
-  // console already makes both stamp the row's server-derived `domain`.
+  // THE FALLBACK, not the primary source any more. {@link brandCatalog} now serves
+  // the bff's real registry (hugmesh-wiki-bff-api#12 landed), so the console renders
+  // a closed <select> whenever that read succeeds. This remains for the one case it
+  // cannot cover: the catalogue read FAILING (a transient error, or a principal the
+  // endpoint denies). Losing the picker entirely there would leave a SUPERADMIN
+  // unable to act at all, so the field degrades to what it was before — a combobox
+  // over OBSERVATION: the two SUPERADMIN cross-domain reads this console already
+  // makes both stamp the row's server-derived `domain`.
   //
   //   GET /bff/wiki/superadmin/access          -> every brand's ACTIVE overrides
   //   GET /bff/wiki/superadmin/audit           -> every brand's content-edit trail

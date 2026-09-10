@@ -178,7 +178,19 @@ async function fillAccess(
   await page.fill('[data-testid="wiki-access-user"]', subject);
   if (opts.reason) await page.fill('[data-testid="wiki-access-reason"]', opts.reason);
   if (opts.targetDomain !== undefined) {
-    await page.fill('[data-testid="wiki-access-target-domain"]', opts.targetDomain);
+    // TWO possible controls, decided at runtime by the bff's brand catalogue
+    // (GET /bff/wiki/superadmin/brands, hugmesh-wiki-bff-api#12):
+    //   - a closed <select> when the catalogue answered and the bff honours targetDomain;
+    //   - the free-text combobox when that read failed, which is the pre-catalogue
+    //     behaviour and the only path that can carry a brand the server does not know.
+    // Neither is present at all when the catalogue says targetDomain is ignored — see the
+    // note on the unknown-brand scenario in cross-brand-target-domain.feature.
+    const picker = page.locator('[data-testid="wiki-access-target-domain-select"]');
+    if ((await picker.count()) > 0) {
+      await picker.selectOption(opts.targetDomain);
+    } else {
+      await page.fill('[data-testid="wiki-access-target-domain"]', opts.targetDomain);
+    }
   }
   await page.click('[data-testid="wiki-access-submit"]');
 }
