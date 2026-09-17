@@ -845,6 +845,25 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
         .toEqual(['', 'acme']);
     });
 
+    it('renders the PICKER, not the warning, as soon as the server honours ONE brand', async () => {
+      // FORWARD COMPATIBILITY with hugmesh-wiki-bff-api#21, which the operator answered on
+      // 2026-09-16 ("Fix: stamp the configured brand"): at exactly one configured pair the
+      // bff's targetDomainHonoured moves from false to TRUE, and this console must follow
+      // it into `picker` with no code change here. That holds only because the mode is
+      // derived from the FLAG first — a count is used solely to tell the two inert shapes
+      // apart — which is precisely the risk the #21 hand-off asked this repo to pin.
+      wiki.brandCatalog.and.resolveTo(
+        catalog({ brands: ['acme'], launchDomain: 'acme', targetDomainHonoured: true }),
+      );
+      await renderAsSuperadmin();
+      expect(fixture.componentInstance.brandMode()).toBe('picker');
+      expect(el().querySelector('[data-testid="wiki-access-brands-inert-mismatch"]'))
+        .withContext('warning that the server discards a field it now honours')
+        .toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).not.toBeNull();
+      expect(fixture.componentInstance.targetDomain()).toBe('acme');
+    });
+
     // ── a11y of the required picker ──
 
     it('advertises the requirement up front, and stays quiet until the operator acts', async () => {
