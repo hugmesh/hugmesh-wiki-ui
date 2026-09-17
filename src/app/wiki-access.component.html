@@ -100,7 +100,12 @@
               [ngModel]="targetDomain()"
               (ngModelChange)="targetDomain.set($event)"
               data-testid="wiki-access-target-domain-select"
-              aria-describedby="wiki-access-target-domain-help wiki-access-target-domain-err"
+              aria-required="true"
+              [attr.aria-describedby]="
+                targetInvalid()
+                  ? 'wiki-access-target-domain-help wiki-access-target-domain-err'
+                  : 'wiki-access-target-domain-help'
+              "
               [attr.aria-invalid]="targetInvalid()"
             >
               <option value="">— choose a brand —</option>
@@ -193,7 +198,11 @@
               The brand the user belongs to. On a multi-brand deployment a superadmin
               must name it — the change is rejected otherwise, because it would not
               apply to the user. Leave blank on a single-brand deployment.
-              @if (brandOptions().length > 0) {
+              @if (brandsLoading()) {
+                <span data-testid="wiki-access-brands-loading-suggestions">
+                  Loading brand suggestions…
+                </span>
+              } @else if (brandOptions().length > 0) {
                 <span data-testid="wiki-access-brands-hint">
                   Suggestions list the {{ brandOptions().length }} brand(s) already seen in the
                   access and audit trails — a brand with no activity yet will not be listed, so

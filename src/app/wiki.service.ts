@@ -531,7 +531,11 @@ export class WikiService {
    * `targetDomainHonoured` is not decoration: the bff reads `targetDomain` only when two
    * or more issuers are configured. Below that a SUPERADMIN write is stamped `default`
    * whatever the picker chose, so a caller that ignored this field would offer a choice
-   * the server discards.
+   * the server discards. That threshold is the SERVER's to change, never this client's:
+   * the operator answered hugmesh-wiki-bff-api#21 on 2026-09-16 ("stamp the configured
+   * brand" at exactly one pair), and when that lands the bff moves this flag and the
+   * console follows it without a code change here — which is precisely why the console
+   * reads the flag instead of re-deriving the rule.
    *
    * `launchDomain` is the brand the wiki is launched on (the same derivation the bff's
    * 007 re-stamp target uses, falling back to `hugmesh`). It is deliberately NOT
@@ -555,9 +559,17 @@ export class WikiService {
     // suggestableBrand filter is applied here too so this source cannot offer something
     // observedBrands would have refused to (a server-side regression that started
     // emitting `default` must not become a guaranteed-400 option).
-    const brands = (raw.brands ?? [])
-      .map((b) => suggestableBrand(b))
-      .filter((b): b is string => b !== null);
+    // De-duplicated like observedBrands, so two entries that NORMALISE equal cannot become
+    // two <option>s with the same `track` key. Unreachable through today's bff (its
+    // DomainRegistry sanitizes brands and returns a LinkedHashSet) — which is exactly why
+    // it is cheap to be symmetric about it here rather than depend on that.
+    const brands = [
+      ...new Set(
+        (raw.brands ?? [])
+          .map((b) => suggestableBrand(b))
+          .filter((b): b is string => b !== null),
+      ),
+    ];
     const launch = suggestableBrand(raw.launchDomain);
     return {
       brands,

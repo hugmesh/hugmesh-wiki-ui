@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, DestroyRef, NgZone, effect, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
@@ -16,7 +16,9 @@ type AccessAction = 'grant' | 'timeout' | 'ban';
  *
  * - `loading` — the catalogue read is in flight. The control is NOT rendered yet: showing a
  *   free-text box that turns into a closed select underneath a half-typed value is how a
- *   typed brand gets silently discarded.
+ *   typed brand gets silently discarded. This mode is BOUNDED — a read that has not answered
+ *   within `catalogueDeadlineMs` degrades to `observed`, because "no control at all" must
+ *   never be the resting state of a console a SUPERADMIN needs to act from.
  * - `picker` — the catalogue answered and the bff DOES consult `targetDomain`. A closed
  *   `<select>` over the authoritative list, preselected to the launch domain when that is
  *   one of the options, and required (the bff 400s a SUPERADMIN write with no brand).
@@ -28,6 +30,17 @@ type AccessAction = 'grant' | 'timeout' | 'ban';
  *   write is stamped `default`, so the change silently never applies
  *   (hugmesh-wiki-bff-api#21). A control here would be a lie in both directions, so the
  *   console warns instead of offering one.
+ *
+ *   THIS MODE HAS A KNOWN EXPIRY DATE, and whoever closes #21 must retire it in the same
+ *   commit. The operator ANSWERED #21 on 2026-09-16 — *"Fix: stamp the configured brand.
+ *   Exactly one configured issuer pair counts as a real brand; SUPERADMIN writes stamp it;
+ *   a mismatched targetDomain becomes a 400 instead of a silent no-op."* Once that lands,
+ *   `targetDomainHonoured` (today `DomainRegistry.isMultiIssuer()`) becomes true at exactly
+ *   one pair, this mode stops being reachable there, and its on-screen copy — "A superadmin
+ *   change made here is recorded against the legacy default brand instead" — would be FALSE
+ *   if it ever rendered. Nothing fails if the two repos drift apart, which is why the bff
+ *   pins the list of five artefacts that must move together in `WikiBrandCatalog`'s javadoc
+ *   and on #21; this component's modes are item 5 of that list.
  * - `observed` — the catalogue read FAILED. Falls back to the previous behaviour: a
  *   combobox over the brands this console can observe. Strictly a subset, so the field
  *   stays typeable and the bff's 400 stays the gate.
@@ -112,9 +125,10 @@ function mergeBrands(a: readonly string[], b: readonly string[]): string[] {
   templateUrl: './wiki-access.component.html',
   styleUrl: './wiki-access.component.scss',
 })
-export class WikiAccessComponent implements OnInit {
+export class WikiAccessComponent {
   private readonly wiki = inject(WikiService);
   private readonly session = inject(SessionService);
+  private readonly zone = inject(NgZone);
 
   readonly action = signal<AccessAction>('grant');
   readonly userSubject = signal('');
@@ -137,8 +151,40 @@ export class WikiAccessComponent implements OnInit {
    *  mode keeps the control typeable. Empty is a valid state in both and is NOT an error. */
   readonly brandOptions = signal<readonly string[]>([]);
 
-  /** True while the catalogue read is in flight. */
+  /** True while a brand read is in flight — the catalogue, or the observed suggestions
+   *  behind the fallback combobox (which renders immediately and fills in when they land). */
   readonly brandsLoading = signal(false);
+
+  /**
+   * How long (ms) to wait for the brand catalogue before giving up on it and degrading to
+   * the observed combobox.
+   *
+   * This exists because the control's very EXISTENCE hangs off one HTTP read: `loading`
+   * renders no control at all, deliberately (see {@link BrandMode}), so a read that never
+   * settles would leave a SUPERADMIN with LESS than they had before this endpoint existed —
+   * a permanent "Loading the brands this server accepts…" and no way to act at all. A
+   * REJECTED read already fell back; a HUNG one now does too.
+   *
+   * A plain field rather than a constant so a spec can drive the deadline without waiting
+   * on the real one: set it between `createComponent` and the first `detectChanges`, which
+   * is when the read is fired.
+   */
+  catalogueDeadlineMs = 8_000;
+
+  /** Latches once the control's SHAPE has been decided — by the catalogue, by its failure,
+   *  or by {@link catalogueDeadlineMs} elapsing. A read that answers after the deadline must
+   *  NOT swap a usable combobox out from under a half-typed value; that is the same hazard
+   *  `loading` renders no control to avoid. */
+  private brandsDecided = false;
+
+  /** Latches once the catalogue read has been FIRED, so the reactive guard in the
+   *  constructor can fire it late (a session that gains SUPERADMIN after this component
+   *  initialised) without ever firing it twice. */
+  private brandsRequested = false;
+
+  /** The {@link catalogueDeadlineMs} timer, cleared when the read settles and when the
+   *  component is destroyed so it can outlive neither. */
+  private deadline: ReturnType<typeof setTimeout> | null = null;
 
   /** How the target-brand control renders — see {@link BrandMode}. Starts `loading` so the
    *  control is not rendered before the server has said which kind of control is honest. */
@@ -162,36 +208,92 @@ export class WikiAccessComponent implements OnInit {
     { value: 'ban', label: 'Ban', help: 'Permanently block a user from wiki read. A ban takes precedence over any grant or role.' },
   ];
 
-  /**
-   * Load the brand catalogue — ONLY for a SUPERADMIN, the only role the field is rendered
-   * for and the only role the endpoint admits. A scoped ADMIN never fires it (it would 403,
-   * and the field is inert for them anyway: the bff derives their brand from their JWT and
-   * ignores any body-supplied domain).
-   */
-  ngOnInit(): void {
-    if (this.showTargetDomain()) void this.loadBrands();
+  constructor() {
+    /*
+     * Load the brand catalogue — ONLY for a SUPERADMIN, the only role the field is rendered
+     * for and the only role the endpoint admits. A scoped ADMIN never fires it (it would
+     * 403, and the field is inert for them anyway: the bff derives their brand from their
+     * JWT and ignores any body-supplied domain).
+     *
+     * REACT to the session, never snapshot it. {@link showTargetDomain} is
+     * `session.canManage`, a LIVE signal: SessionService re-reads `hug.session` on its
+     * same-document broadcast and on a cross-tab `storage` event, so the role can arrive
+     * AFTER this component initialises. An `ngOnInit` `if` read that signal exactly once,
+     * and when it read false the template's `@if` could still flip on later with the mode
+     * stuck at `loading` — a SUPERADMIN looking at "Loading…" forever, with no control at
+     * all, where the pre-catalogue console gave them a working free-text field.
+     *
+     * Fires at most ONCE ever ({@link brandsRequested}).
+     */
+    effect(() => {
+      if (!this.showTargetDomain() || this.brandsRequested) return;
+      this.brandsRequested = true;
+      void this.loadBrands();
+    });
+    inject(DestroyRef).onDestroy(() => this.clearDeadline());
   }
 
   /**
    * Fetch the AUTHORITATIVE brand catalogue and decide how the control renders, falling back
-   * to the observed suggestions when that read fails.
+   * to the observed suggestions when that read FAILS or does not answer in time.
    *
-   * The failure branch is not a formality. Without it a denied or flaky catalogue read would
-   * leave a SUPERADMIN with no control at all and no way to act; with it the field is exactly
-   * what it was before the endpoint existed — a typeable combobox whose suggestions are a
-   * subset, with the bff's 400 as the real gate.
+   * Neither fallback is a formality. Without them a denied, flaky or HUNG catalogue read
+   * would leave a SUPERADMIN with no control at all and no way to act; with them the field
+   * is exactly what it was before the endpoint existed — a typeable combobox whose
+   * suggestions are a subset, with the bff's 400 as the real gate.
+   *
+   * Never rejects: it is fired from an effect, un-awaited.
    */
   async loadBrands(): Promise<void> {
     this.brandsLoading.set(true);
+    // OUTSIDE the Angular zone deliberately: a pending macrotask inside it keeps the zone
+    // unstable, which would make every spec's `whenStable()` wait out the real deadline.
+    // A signal write from the handler still schedules change detection — Angular's
+    // scheduler is not zone-gated.
+    this.deadline = this.zone.runOutsideAngular(() =>
+      setTimeout(() => void this.fallBackToObserved(), this.catalogueDeadlineMs),
+    );
+    let catalog: BrandCatalog;
     try {
-      this.applyCatalog(await this.wiki.brandCatalog());
+      catalog = await this.wiki.brandCatalog();
     } catch {
       // A 403 (not a SUPERADMIN) or a transient failure — NOT "the server says there are
-      // no brands", which is a 200 with an empty list and is handled above.
+      // no brands", which is a 200 with an empty list and is handled below.
+      this.clearDeadline();
+      await this.fallBackToObserved();
+      return;
+    }
+    this.clearDeadline();
+    // The deadline already chose the combobox, and the operator may have typed in it.
+    if (this.brandsDecided) return;
+    this.brandsDecided = true;
+    this.applyCatalog(catalog);
+    this.brandsLoading.set(false);
+  }
+
+  /**
+   * Degrade to the observed combobox — the pre-catalogue behaviour — because the catalogue
+   * read failed or ran past {@link catalogueDeadlineMs}. Idempotent, and never rejects.
+   */
+  private async fallBackToObserved(): Promise<void> {
+    if (this.brandsDecided) return;
+    this.brandsDecided = true;
+    try {
       await this.loadObservedBrands();
+    } catch {
+      // observedBrands is documented and implemented never to reject (Promise.allSettled).
+      // If that ever changed, the combobox is already on screen and fully usable with no
+      // suggestions at all — the one thing this must never do is leave the control hidden.
     } finally {
       this.brandsLoading.set(false);
     }
+  }
+
+  /** Cancel the catalogue deadline; safe to call twice. */
+  private clearDeadline(): void {
+    if (this.deadline === null) return;
+    clearTimeout(this.deadline);
+    this.deadline = null;
   }
 
   /**
@@ -238,7 +340,7 @@ export class WikiAccessComponent implements OnInit {
     // not hidden behind the loading placeholder until they arrive.
     this.brandMode.set('observed');
     const observed = await this.wiki.observedBrands();
-    // FOLD, never SET. {@link ngOnInit} fires this read WITHOUT awaiting it, so a write can
+    // FOLD, never SET. The constructor's effect fires this read WITHOUT awaiting it, so a write can
     // be applied — and its server-stamped brand learnt — while the read is still outstanding.
     // Replacing the list with the read's older snapshot would silently drop that brand, and
     // nothing would tell the operator it had gone.
@@ -448,8 +550,10 @@ export class WikiAccessComponent implements OnInit {
     // server's own registry and already complete, so folding a row's brand in could only add
     // something the catalogue deliberately left out; in the inert modes the row is stamped
     // `default` (which suggestableBrand drops) and there is no control to grow. `loading` is
-    // deliberately NOT excluded — ngOnInit does not await the read, so a write can land
+    // deliberately NOT excluded — the catalogue read is fired un-awaited, so a write can land
     // first, and refusing to learn then would depend on microtask ordering for its answer.
+    // A brand learnt here is a SUGGESTION: applyCatalog SETS the authoritative list over it
+    // (never folds), so the catalogue's answer replaces anything learnt while it was loading.
     const decided = this.brandMode();
     if (decided === 'picker' || decided === 'inert' || decided === 'inert-mismatch') return;
     const brand = suggestableBrand(domain);

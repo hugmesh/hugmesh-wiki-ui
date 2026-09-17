@@ -510,6 +510,16 @@ describe('WikiService — brand catalogue (the authority behind the picker)', ()
     expect((await promise).brands).toEqual(['acme']);
   });
 
+  it('de-duplicates, so two entries that normalise equal cannot become two options', async () => {
+    // Symmetric with observedBrands (which unions into a Set). Unreachable through today's
+    // bff — DomainRegistry sanitizes brands and returns a LinkedHashSet — which is exactly
+    // why being symmetric here is cheap rather than depending on that.
+    const promise = service.brandCatalog();
+    httpMock.expectOne('/bff/wiki/superadmin/brands')
+      .flush({ brands: ['acme', ' acme ', 'globex'], targetDomainHonoured: true });
+    expect((await promise).brands).toEqual(['acme', 'globex']);
+  });
+
   it('treats every field as optional, because the generated model marks them so', async () => {
     const promise = service.brandCatalog();
     httpMock.expectOne('/bff/wiki/superadmin/brands').flush({});

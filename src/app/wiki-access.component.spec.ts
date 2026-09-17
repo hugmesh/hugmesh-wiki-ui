@@ -481,6 +481,26 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
         .withContext('the 400 is precisely the server saying this brand does not exist')
         .toEqual([]);
     });
+
+    it('says the suggestions are still loading, rather than looking like there are none', async () => {
+      // The combobox is on screen the moment the catalogue is known unavailable, with its
+      // suggestions still outstanding. Without this line the operator cannot tell "not read
+      // yet" from "this console has never seen a brand" — and `brandsLoading` was left
+      // write-only dead state when the template was rewritten around the five modes.
+      wiki.brandCatalog.and.rejectWith(new WikiApiError(503, 'upstream down'));
+      wiki.observedBrands.and.returnValue(new Promise<string[]>(() => {}));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]')).not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-brands-loading-suggestions"]'))
+        .withContext('brandsLoading is rendered again, in the one mode that has a second read')
+        .not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-brands-none"]'))
+        .withContext('"none observed" is a different fact from "not read yet"').toBeNull();
+    });
   });
 
   // ── brand picker: the AUTHORITATIVE catalogue (issue #3 item 2, unblocked by the
@@ -725,6 +745,136 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
           + 'value is how a typed brand gets silently discarded')
         .toBeNull();
       expect(el().querySelector('[data-testid="wiki-access-target-domain"]')).toBeNull();
+    });
+
+    // ── the control must never be LOST: `loading` renders nothing, so every way of
+    //    staying in it forever is a superadmin with less than the pre-catalogue console
+    //    gave them. Two ways existed, and both are closed below. ──
+
+    it('renders the control when the SESSION gains SUPERADMIN after this component initialised', async () => {
+      // showTargetDomain is session.canManage, a LIVE signal: SessionService re-reads
+      // hug.session on its same-document broadcast and on a cross-tab `storage` event. An
+      // ngOnInit `if` sampled it exactly once, so a role that arrived a moment later left
+      // the template's @if on with the mode stuck at `loading` — no control, forever.
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme', 'globex'], launchDomain: 'acme' }));
+      expect(wiki.brandCatalog)
+        .withContext('the beforeEach fixture is a scoped ADMIN: no field, no read')
+        .not.toHaveBeenCalled();
+
+      canManage.set(true);          // the host shell (or another tab) writes a superadmin session
+      fixture.detectChanges();
+      await fixture.whenStable();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(wiki.brandCatalog).toHaveBeenCalled();
+      expect(fixture.componentInstance.brandMode()).toBe('picker');
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-brands-loading"]')).toBeNull();
+    });
+
+    it('stops waiting for a catalogue that never answers, and falls back to the combobox', async () => {
+      // A REJECTED read already fell back. A HUNG one (no response, connection held open)
+      // had no timeout and no retry, so the field stayed at "Loading the brands this server
+      // accepts…" with no control at all — strictly worse than before the endpoint existed.
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>(() => {}));
+      wiki.observedBrands.and.resolveTo(['branda']);
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.componentInstance.catalogueDeadlineMs = 10;   // drive it; do not wait out the real one
+      fixture.detectChanges();
+      expect(el().querySelector('[data-testid="wiki-access-brands-loading"]'))
+        .withContext('still honestly loading before the deadline').not.toBeNull();
+
+      await new Promise((r) => setTimeout(r, 40));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(fixture.componentInstance.brandMode()).toBe('observed');
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]'))
+        .withContext('a usable free-text field, exactly what main gave a superadmin')
+        .not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-brands-loading"]')).toBeNull();
+    });
+
+    it('does not swap the combobox out from under a half-typed brand when the catalogue answers late', async () => {
+      // The deadline decided the shape. Letting a late answer re-decide it would recreate
+      // the exact hazard `loading` renders no control to avoid.
+      let land!: (c: BrandCatalog) => void;
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>((res) => { land = res; }));
+      wiki.observedBrands.and.resolveTo([]);
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.componentInstance.catalogueDeadlineMs = 10;
+      fixture.detectChanges();
+      await new Promise((r) => setTimeout(r, 40));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      fixture.componentInstance.targetDomain.set('half-typed');
+      land(catalog({ brands: ['acme'], launchDomain: 'acme' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(fixture.componentInstance.brandMode()).toBe('observed');
+      expect(fixture.componentInstance.targetDomain()).toBe('half-typed');
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).toBeNull();
+    });
+
+    it('REPLACES a brand learnt while the catalogue was loading — it never folds into it', async () => {
+      // learnBrand is deliberately allowed during `loading` (the read is not awaited, so a
+      // write can land first). The catalogue's answer is AUTHORITATIVE and must SET the
+      // list over it: folding would leave an option the server deliberately left out.
+      let land!: (c: BrandCatalog) => void;
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>((res) => { land = res; }));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      wiki.grant.and.resolveTo(access({ domain: 'learnt-while-loading' }));
+      await c.submit();
+      expect(c.brandOptions()).toContain('learnt-while-loading');
+
+      land(catalog({ brands: ['acme'], launchDomain: 'acme' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(c.brandOptions()).toEqual(['acme']);
+      expect(selectOptions())
+        .withContext('an option the server did not offer is a guaranteed 400')
+        .toEqual(['', 'acme']);
+    });
+
+    // ── a11y of the required picker ──
+
+    it('advertises the requirement up front, and stays quiet until the operator acts', async () => {
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme', 'globex'] }));
+      await renderAsSuperadmin();
+      const select = el().querySelector('[data-testid="wiki-access-target-domain-select"]')!;
+      expect(select.getAttribute('aria-required'))
+        .withContext('the requirement lived only in formValid(), so a screen reader got no '
+          + 'advance signal at all')
+        .toBe('true');
+      expect(select.getAttribute('aria-invalid'))
+        .withContext('nothing is wrong yet — the operator has not interacted').toBe('false');
+      expect(select.getAttribute('aria-describedby'))
+        .withContext('must not name the error id while that element does not exist')
+        .toBe('wiki-access-target-domain-help');
+      expect(el().querySelector('#wiki-access-target-domain-err')).toBeNull();
+    });
+
+    it('marks the select invalid and points at the error once a submit is refused', async () => {
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme', 'globex'] }));
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      await c.submit();
+      fixture.detectChanges();
+      const select = el().querySelector('[data-testid="wiki-access-target-domain-select"]')!;
+      expect(select.getAttribute('aria-invalid')).toBe('true');
+      expect(select.getAttribute('aria-describedby'))
+        .toBe('wiki-access-target-domain-help wiki-access-target-domain-err');
+      expect(el().querySelector('#wiki-access-target-domain-err')).not.toBeNull();
     });
   });
 });

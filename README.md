@@ -149,11 +149,23 @@ What the catalogue says decides which of five shapes the control takes
 
 | catalogue | control | why |
 | --- | --- | --- |
-| still loading | none, just "Loading the brands this server accepts…" | a free-text box that turns into a closed select underneath a half-typed value is how a typed brand gets silently discarded |
-| `targetDomainHonoured: true` | a closed `<select>` over `brands` | the list is the server's own and complete |
+| still loading | none, just "Loading the brands this server accepts…" | a free-text box that turns into a closed select underneath a half-typed value is how a typed brand gets silently discarded. **Bounded** — see below |
+| `targetDomainHonoured: true`, `brands` non-empty | a closed `<select>` over `brands` | the list is the server's own and complete |
+| `targetDomainHonoured: true`, `brands` empty | the same `<select>`, holding only its placeholder, plus a line saying no change can be applied here | reachable (two issuers both mapped to `default` are two entries but zero offerable brands). The server would reject every brand there, so submit stays blocked — but an empty control that silently never submits would be worse than saying so |
 | `targetDomainHonoured: false`, `brands` empty | none, one line of explanation | single-issuer deployment: every principal is `default`, so a SUPERADMIN write stamped `default` is *correct* and there is nothing to choose |
 | `targetDomainHonoured: false`, `brands` non-empty | none, a **warning** naming the brand | the hazard below |
-| the read failed | the previous combobox over observed brands | losing the control entirely would leave a SUPERADMIN unable to act |
+| the read failed **or did not answer in time** | the previous combobox over observed brands | losing the control entirely would leave a SUPERADMIN unable to act |
+
+**"Loading" is a bounded state, deliberately.** Because that mode renders *no* control,
+the read it waits on decides whether the operator has a control at all — so it cannot be
+allowed to wait forever. A read that has not answered within
+`WikiAccessComponent#catalogueDeadlineMs` (8s) degrades to the observed combobox exactly as
+a *rejected* read does, and a catalogue that answers after that deadline is ignored rather
+than swapped in under a half-typed value. The read is also fired from an **effect** on
+`session.canManage`, not from an `ngOnInit` snapshot of it: the session can gain SUPERADMIN
+after this component initialises (the host shell and each remote hold their own
+`SessionService` over one `localStorage` key and re-read on a broadcast or a cross-tab
+`storage` event), and a one-shot guard left that operator looking at "Loading…" forever.
 
 The picker is **preselected to the domain the wiki is launched on** (`launchDomain`, the
 same derivation the BFF's 007 re-stamp target uses, falling back to `hugmesh`) — but only
@@ -168,8 +180,15 @@ round-trip rather than after it.
 configured issuer pairs. With **exactly one** (`app.tenancy.issuers=https://id=hugmesh`)
 its users resolve `hugmesh` while a SUPERADMIN's grant or ban is stamped `default`, so
 `WikiAccessGuard` — which reads back `activeFor(subject, "hugmesh")` — never matches it:
-the ban silently does nothing. That is filed as **hugmesh-wiki-bff-api#21**. Until it is
-decided, the console refuses to render a control there and says why, and
+the ban silently does nothing. That is filed as **hugmesh-wiki-bff-api#21**, and the
+operator **answered it on 2026-09-16** — *"Fix: stamp the configured brand. Exactly one
+configured issuer pair counts as a real brand; SUPERADMIN writes stamp it; a mismatched
+targetDomain becomes a 400 instead of a silent no-op."* That fix is a separate lane on the
+BFF, and **it retires this mode**: once it lands, `targetDomainHonoured` is true at exactly
+one pair, the warning stops being reachable, and its wording would be false if it ever
+rendered. `WikiBrandCatalog`'s javadoc and #21 carry the list of five artefacts that must
+move in that same commit; this console's `BrandMode`s are item 5. Until then, the console
+refuses to render a control there and says why, and
 `WikiAccessComponent#submit` does not send `targetDomain` in either inert mode — a body
 carrying a brand the server discards would make an audit log read as a targeted write.
 
@@ -648,22 +667,25 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   available and unset everywhere; the same-origin default is what actually
   runs. Wiring the hook (or a host-side assignment) is the follow-up if a
   deployment ever needs the wiki BFF on another origin.
-- **The brand picker's list is OBSERVED, not authoritative**: the target-brand
-  control is now a combobox with suggestions (see **Access console: the
-  cross-brand target**), but the wiki-bff still exposes no "known brands"
-  endpoint, so the suggestions are derived from the brands this console can
-  see — a strict subset of the bff's `DomainRegistry`. A brand with no access
-  override and no entry in the bounded audit page is therefore not suggested,
-  which is exactly why the field stays typeable rather than becoming a closed
-  `<select>`, and why the bff's 400 on an unknown brand remains the real gate.
-  The observed set is additionally filtered of the never-targetable `default`
-  and `__deny__` sentinels (see **Access console: the cross-brand target**), so
-  a single-issuer-migrated cluster shows no suggestions rather than one that
-  always 400s.
-  Closing this needs a brand-list endpoint on `hugmesh-wiki-bff-api` (the
-  authoritative set is its server-side `DomainRegistry`, which already has
-  `knownDomains()`); it cannot be closed from this repo. Tracked in
-  hugmesh-wiki-bff-api issue #12.
+- ~~**The brand picker's list is OBSERVED, not authoritative**~~ — **CLOSED.**
+  hugmesh-wiki-bff-api#12 landed (`GET /bff/wiki/superadmin/brands`), so the
+  control is a closed `<select>` over the server's own `DomainRegistry` and an
+  offered brand is accepted by construction. See **Access console: the
+  cross-brand target**. What remains is the *fallback*, and it is deliberate,
+  not a gap: when that read is denied, fails or does not answer within the
+  deadline, the field degrades to the previous combobox over OBSERVED brands —
+  a strict subset (a brand with no access override and no entry in the bounded
+  audit page is not suggested), which is why the fallback stays typeable and
+  the bff's 400 on an unknown brand remains the real gate there. The observed
+  set is additionally filtered of the never-targetable `default` and `__deny__`
+  sentinels, so a single-issuer-migrated cluster shows no suggestions rather
+  than one that always 400s.
+- **A SUPERADMIN change is still stamped `default` at exactly one configured
+  issuer pair**, so it never matches the users it names: a server-side defect
+  this console can only DETECT and warn about (the `inert-mismatch` mode).
+  Tracked as **hugmesh-wiki-bff-api#21**, which the operator answered on
+  2026-09-16 (*"Fix: stamp the configured brand"*); the fix is a separate BFF
+  lane and retires that mode — see **Access console: the cross-brand target**.
 - **A page delete cannot be confirmed from the status code**: the bff's
   `DELETE /bff/wiki/admin/pages/{slug}` answers `204` even when it removed no
   page row — its SUPERADMIN path resolves the page cross-brand but scopes the
