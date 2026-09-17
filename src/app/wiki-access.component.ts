@@ -14,11 +14,34 @@ type AccessAction = 'grant' | 'timeout' | 'ban';
  * picker (the operator believes they targeted brand X and the row lands elsewhere,
  * silently).
  *
- * - `loading` — the catalogue read is in flight. The control is NOT rendered yet: showing a
- *   free-text box that turns into a closed select underneath a half-typed value is how a
- *   typed brand gets silently discarded. This mode is BOUNDED — a read that has not answered
- *   within `catalogueDeadlineMs` degrades to `observed`, because "no control at all" must
- *   never be the resting state of a console a SUPERADMIN needs to act from.
+ * - `loading` — the catalogue read is in flight. A **DISABLED** control is rendered: the same
+ *   label and `<select>` the `picker` case draws, with nothing choosable in it.
+ *
+ *   **Operator decision 33b, 2026-09-17** (hugmesh-generator#347, comment 5722264043), taken
+ *   AGAINST the recommendation. What shipped first was NO control at all, on the reasoning
+ *   that a free-text box which turns into a closed select underneath a half-typed value is how
+ *   a typed brand gets silently discarded. That reasoning stands — and a DISABLED select does
+ *   not trip it, because nothing can be typed or chosen while it is disabled — but it bought
+ *   the hazard the operator actually objected to: the FORM'S SHAPE MOVED UNDER THEM, a field
+ *   appearing and pushing the rest of the form down at an unpredictable moment up to
+ *   {@link catalogueDeadlineMs} later.
+ *
+ *   Three costs this carries, none of them removable inside this mode, all measured rather
+ *   than assumed (recorded on wiki-ui#3):
+ *   1. A disabled control is NOT focusable and is skipped by keyboard and screen-reader
+ *      traversal, so the "loading" state has to be ANNOUNCED (`role="status"` +
+ *      `aria-live="polite"` on the help text, tied to the control by `aria-describedby`)
+ *      rather than merely drawn.
+ *   2. It stabilises the shape only on the path that ends in `picker`. On the degrade path
+ *      (decision 33c's 8-second deadline → `observed`) the control still CHANGES TYPE, from a
+ *      `<select>` to a typeable `<input list>`.
+ *   3. On a single-issuer deployment the read resolves to `inert` / `inert-mismatch`, which
+ *      render no control at all — so there the disabled select DISAPPEARS instead of filling
+ *      in. Shape still moves, in the other direction.
+ *
+ *   This mode is BOUNDED — a read that has not answered within `catalogueDeadlineMs` degrades
+ *   to `observed`, because a control nobody can use must never be the resting state of a
+ *   console a SUPERADMIN needs to act from.
  * - `picker` — the catalogue answered and the bff DOES consult `targetDomain`. A closed
  *   `<select>` over the authoritative list, preselected to the launch domain when that is
  *   one of the options, and required (the bff 400s a SUPERADMIN write with no brand).

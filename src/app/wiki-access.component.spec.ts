@@ -578,6 +578,65 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
       expect(selectOptions()).not.toContain('hugmesh');
     });
 
+    it('DECISION 33a: the picker is REQUIRED and blocks submit inline, before the round-trip', async () => {
+      // RATIFIED as built (operator, 2026-09-17, hugmesh-generator#347). The question put to
+      // the operator was whether to keep converting the bff's fail-closed 400 into a
+      // client-side error, or let the round-trip carry it. They kept it — so this pins the
+      // three parts that make it true, and a "just let the server say no" simplification
+      // turns it red.
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme', 'globex'], launchDomain: 'hugmesh' }));
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+
+      // 1. required — the control advertises it, so AT announces it before submit.
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')!
+        .getAttribute('aria-required')).toBe('true');
+      // 2. blocks — formValid() is false with a complete form but no brand.
+      expect(c.formValid())
+        .withContext('a complete form with no brand must not be submittable').toBeFalse();
+      // 3. INLINE and BEFORE the round-trip — no request is made at all.
+      await c.submit();
+      expect(wiki.grant).not.toHaveBeenCalled();
+      expect(wiki.ban).not.toHaveBeenCalled();
+      expect(wiki.timeout).not.toHaveBeenCalled();
+      fixture.detectChanges();
+      const err = el().querySelector('#wiki-access-target-domain-err');
+      expect(err).withContext('the refusal is rendered next to the field').not.toBeNull();
+      expect(err!.getAttribute('role')).toBe('alert');
+
+      // …and it stops blocking the moment a brand is chosen.
+      c.targetDomain.set('acme');
+      expect(c.formValid()).toBeTrue();
+      expect(c.targetInvalid()).toBeFalse();
+    });
+
+    it('DECISION 33a: required ONLY where the server said it reads the field', async () => {
+      // The other half of the ratified answer, and the reason it is not simply "always
+      // required": in every mode but `picker` the bff ignores targetDomain, so requiring one
+      // would block a write the server would have accepted.
+      wiki.brandCatalog.and.rejectWith(new WikiApiError(503, 'upstream down'));
+      wiki.observedBrands.and.resolveTo([]);
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      expect(c.brandMode()).toBe('observed');
+      c.userSubject.set('u');
+      expect(c.formValid())
+        .withContext('the fallback combobox must never block a write on a blank brand').toBeTrue();
+      expect(c.targetInvalid()).toBeFalse();
+    });
+
+    it('DECISION 33c: the degrade deadline is EIGHT seconds', async () => {
+      // RATIFIED as built (operator, 2026-09-17). It is one number, and it is the only thing
+      // bounding how long a superadmin looks at a control they cannot use — so it is pinned
+      // as a literal rather than inferred from a timing test.
+      // Read off a freshly constructed component (the beforeEach fixture is a scoped ADMIN,
+      // so no catalogue read has been fired and no spec has had a chance to drive it down).
+      expect(fixture.componentInstance.catalogueDeadlineMs)
+        .withContext('decision 33c: 8 seconds before the console degrades to free text')
+        .toBe(8_000);
+    });
+
     it('blocks submit until a brand is chosen, inline — the bff 400s without one', async () => {
       wiki.brandCatalog.and.resolveTo(
         catalog({ brands: ['acme', 'globex'], launchDomain: 'hugmesh' }),
@@ -734,17 +793,87 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
       expect(el().querySelector('[data-testid="wiki-access-brands-loading"]')).toBeNull();
     });
 
-    it('renders no control at all while the catalogue is still in flight', async () => {
+    it('DECISION 33b: renders a DISABLED control while the catalogue is still in flight', async () => {
+      // Operator decision 33b (2026-09-17, hugmesh-generator#347), taken AGAINST the
+      // recommendation. What shipped was NO control at all; the point of the change is that
+      // the SHAPE OF THE FORM stops moving under the operator. Reverting to "render nothing"
+      // turns this red.
       wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>(() => {}));
       canManage.set(true);
       fixture = TestBed.createComponent(WikiAccessComponent);
       fixture.detectChanges();
-      expect(el().querySelector('[data-testid="wiki-access-brands-loading"]')).not.toBeNull();
-      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]'))
-        .withContext('a free-text box that turns into a closed select under a half-typed '
-          + 'value is how a typed brand gets silently discarded')
-        .toBeNull();
+
+      const loading = el().querySelector<HTMLSelectElement>(
+        '[data-testid="wiki-access-target-domain-loading-select"]');
+      expect(loading)
+        .withContext('decision 33b: a control is rendered while the read is in flight')
+        .not.toBeNull();
+      expect(loading!.tagName)
+        .withContext('the SAME kind of control the picker becomes, so it is filled in place')
+        .toBe('SELECT');
+      expect(loading!.disabled)
+        .withContext('DISABLED, not merely empty: nothing can be typed or chosen yet, so the '
+          + 'half-typed-value hazard the previous design avoided is avoided here too')
+        .toBeTrue();
+      expect(loading!.getAttribute('aria-busy')).toBe('true');
+
+      // A disabled control is skipped by keyboard and screen-reader traversal, so the state
+      // has to be ANNOUNCED, not merely drawn.
+      const help = el().querySelector('[data-testid="wiki-access-brands-loading"]');
+      expect(help).not.toBeNull();
+      expect(help!.getAttribute('role')).toBe('status');
+      expect(help!.getAttribute('aria-live')).toBe('polite');
+      expect(loading!.getAttribute('aria-describedby')).toBe(help!.id);
+
+      // Still NOT the real picker and NOT the typeable fallback — those are decided by the
+      // catalogue, and neither may be reachable before it answers.
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).toBeNull();
       expect(el().querySelector('[data-testid="wiki-access-target-domain"]')).toBeNull();
+    });
+
+    it('DECISION 33b: the disabled control is replaced IN PLACE when the catalogue answers', async () => {
+      // The whole gain is that the field does not appear from nowhere: the loading control and
+      // the picker occupy the same slot, so the form below it does not jump.
+      let land!: (c: BrandCatalog) => void;
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>((res) => { land = res; }));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+
+      const fieldsBefore = el().querySelectorAll('.wiki-field').length;
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-loading-select"]')).not.toBeNull();
+
+      land(catalog({ brands: ['acme', 'globex'], launchDomain: 'acme' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-loading-select"]')).toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).not.toBeNull();
+      expect(el().querySelectorAll('.wiki-field').length)
+        .withContext('the same number of fields before and after: nothing was pushed down')
+        .toBe(fieldsBefore);
+    });
+
+    it('DECISION 33b, the COST: the shape still changes on the degrade path', async () => {
+      // Recorded, not hidden. 33b stabilises the path that ends in `picker`; on 33c's
+      // deadline the control still changes TYPE, from a <select> to a typeable <input>.
+      // A future change that claims to have stabilised every path has to move this test.
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>(() => {}));
+      wiki.observedBrands.and.resolveTo(['branda']);
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.componentInstance.catalogueDeadlineMs = 10;
+      fixture.detectChanges();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-loading-select"]')!.tagName)
+        .toBe('SELECT');
+
+      await new Promise((r) => setTimeout(r, 40));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]')!.tagName)
+        .withContext('the measured residual cost of 33b: SELECT -> INPUT on the degrade path')
+        .toBe('INPUT');
     });
 
     // ── the control must never be LOST: `loading` renders nothing, so every way of
