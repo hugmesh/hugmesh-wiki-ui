@@ -75,47 +75,149 @@
     }
 
     @if (showTargetDomain()) {
-      <div class="wiki-field">
-        <label for="wiki-access-target-domain">Target brand</label>
-        <!-- A COMBOBOX, not a select: the suggestions below are the brands this
-             console can observe, which is a subset of the server's registry, so a
-             brand it has not seen must still be typeable. The server validates. -->
-        <input
-          id="wiki-access-target-domain"
-          name="targetDomain"
-          list="wiki-access-brand-options"
-          [ngModel]="targetDomain()"
-          (ngModelChange)="targetDomain.set($event)"
-          data-testid="wiki-access-target-domain"
-          aria-describedby="wiki-access-target-domain-help"
-          maxlength="64"
-          autocomplete="off"
-        />
-        <datalist id="wiki-access-brand-options" data-testid="wiki-access-brand-options">
-          @for (b of brandOptions(); track b) {
-            <option [value]="b"></option>
-          }
-        </datalist>
-        <p class="wiki-field__help" id="wiki-access-target-domain-help">
-          The brand the user belongs to. On a multi-brand deployment a superadmin
-          must name it — the change is rejected otherwise, because it would not
-          apply to the user. Leave blank on a single-brand deployment.
-          @if (brandsLoading()) {
-            <span data-testid="wiki-access-brands-loading">Loading brand suggestions…</span>
-          } @else if (brandOptions().length > 0) {
-            <span data-testid="wiki-access-brands-hint">
-              Suggestions list the {{ brandOptions().length }} brand(s) already seen in the
-              access and audit trails — a brand with no activity yet will not be listed, so
-              you can type any brand. The server rejects one it does not know.
-            </span>
-          } @else {
-            <span data-testid="wiki-access-brands-none">
-              No brands observed yet, so there is nothing to suggest — type the brand name.
-              The server rejects one it does not know.
-            </span>
-          }
-        </p>
-      </div>
+      <!-- ONE RULE decides everything below: never offer a brand the server will not
+           honour. The bff's brand catalogue (GET /bff/wiki/superadmin/brands) says which of
+           the five shapes is honest here; two of them deliberately render NO control. -->
+      @switch (brandMode()) {
+
+        @case ('loading') {
+          <div class="wiki-field">
+            <p class="wiki-field__help" data-testid="wiki-access-brands-loading">
+              Loading the brands this server accepts…
+            </p>
+          </div>
+        }
+
+        @case ('picker') {
+          <div class="wiki-field">
+            <label for="wiki-access-target-domain-select">Target brand</label>
+            <!-- A CLOSED select: every option came from the server's own registry, filtered
+                 through the same check it validates a submitted brand with, so anything
+                 listed here is accepted by construction. -->
+            <select
+              id="wiki-access-target-domain-select"
+              name="targetDomain"
+              [ngModel]="targetDomain()"
+              (ngModelChange)="targetDomain.set($event)"
+              data-testid="wiki-access-target-domain-select"
+              aria-required="true"
+              [attr.aria-describedby]="
+                targetInvalid()
+                  ? 'wiki-access-target-domain-help wiki-access-target-domain-err'
+                  : 'wiki-access-target-domain-help'
+              "
+              [attr.aria-invalid]="targetInvalid()"
+            >
+              <option value="">— choose a brand —</option>
+              @for (b of brandOptions(); track b) {
+                <option [value]="b">{{ b }}{{ b === launchDomain() ? ' (this wiki)' : '' }}</option>
+              }
+            </select>
+            <p class="wiki-field__help" id="wiki-access-target-domain-help">
+              The brand the user belongs to. This server requires one, and these are the
+              brands it accepts.
+              @if (brandOptions().length === 0) {
+                <span data-testid="wiki-access-brands-catalog-empty">
+                  This server reports no brands it would accept, so no change can be applied
+                  from here until its brands are configured.
+                </span>
+              } @else {
+                <span data-testid="wiki-access-brands-catalog-hint">
+                  The list is the server's own, so it is complete
+                  ({{ brandOptions().length }} brand(s)).
+                  @if (launchDomain(); as launch) {
+                    @if (brandOptions().includes(launch)) {
+                      This wiki is launched on <code>{{ launch }}</code>, which is selected by
+                      default.
+                    }
+                  }
+                </span>
+              }
+            </p>
+            @if (targetInvalid()) {
+              <p class="wiki-error" id="wiki-access-target-domain-err" role="alert">
+                Choose the brand this change applies to.
+              </p>
+            }
+          </div>
+        }
+
+        @case ('inert') {
+          <div class="wiki-field">
+            <p class="wiki-field__help" data-testid="wiki-access-brands-inert">
+              This is a single-brand deployment, so there is no brand to choose — the change
+              applies to the only one.
+            </p>
+          </div>
+        }
+
+        @case ('inert-mismatch') {
+          <!-- The server knows a real brand but will NOT read a target brand from this
+               request: it stamps the legacy `default` brand on a superadmin change
+               regardless. Offering a control would promise a choice that is discarded, and
+               the change may not reach the user at all. -->
+          <div class="wiki-field">
+            <p class="wiki-warning" role="note" data-testid="wiki-access-brands-inert-mismatch">
+              This server does not accept a target brand, but its users belong to
+              @if (brandOptions().length === 1) {
+                <code>{{ brandOptions()[0] }}</code>.
+              } @else {
+                {{ brandOptions().length }} named brands.
+              }
+              A superadmin change made here is recorded against the legacy default brand
+              instead, so it may not take effect for those users. Ask an admin of that brand
+              to make the change, or have the server configured with its brands before
+              relying on this.
+            </p>
+          </div>
+        }
+
+        @case ('observed') {
+          <div class="wiki-field">
+            <label for="wiki-access-target-domain">Target brand</label>
+            <!-- FALLBACK: the server's brand list could not be read, so these suggestions are
+                 only the brands this console has observed — a subset. The field must stay
+                 typeable, and the server stays the authority. -->
+            <input
+              id="wiki-access-target-domain"
+              name="targetDomain"
+              list="wiki-access-brand-options"
+              [ngModel]="targetDomain()"
+              (ngModelChange)="targetDomain.set($event)"
+              data-testid="wiki-access-target-domain"
+              aria-describedby="wiki-access-target-domain-help"
+              maxlength="64"
+              autocomplete="off"
+            />
+            <datalist id="wiki-access-brand-options" data-testid="wiki-access-brand-options">
+              @for (b of brandOptions(); track b) {
+                <option [value]="b"></option>
+              }
+            </datalist>
+            <p class="wiki-field__help" id="wiki-access-target-domain-help">
+              The brand the user belongs to. On a multi-brand deployment a superadmin
+              must name it — the change is rejected otherwise, because it would not
+              apply to the user. Leave blank on a single-brand deployment.
+              @if (brandsLoading()) {
+                <span data-testid="wiki-access-brands-loading-suggestions">
+                  Loading brand suggestions…
+                </span>
+              } @else if (brandOptions().length > 0) {
+                <span data-testid="wiki-access-brands-hint">
+                  Suggestions list the {{ brandOptions().length }} brand(s) already seen in the
+                  access and audit trails — a brand with no activity yet will not be listed, so
+                  you can type any brand. The server rejects one it does not know.
+                </span>
+              } @else {
+                <span data-testid="wiki-access-brands-none">
+                  No brands observed yet, so there is nothing to suggest — type the brand name.
+                  The server rejects one it does not know.
+                </span>
+              }
+            </p>
+          </div>
+        }
+      }
     }
 
     <div class="wiki-field">

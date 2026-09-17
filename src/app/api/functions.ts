@@ -29,6 +29,8 @@ export type { WikiAccessGrant$Params as WikiAccessGrant$Params } from './fn/wiki
 export { wikiAccessGrant as wikiAccessGrant } from './fn/wiki-access/wiki-access-grant';
 export type { WikiAccessBan$Params as WikiAccessBan$Params } from './fn/wiki-access/wiki-access-ban';
 export { wikiAccessBan as wikiAccessBan } from './fn/wiki-access/wiki-access-ban';
+export type { WikiAccessBrands$Params as WikiAccessBrands$Params } from './fn/wiki-access/wiki-access-brands';
+export { wikiAccessBrands as wikiAccessBrands } from './fn/wiki-access/wiki-access-brands';
 export type { WikiAccessListActive$Params as WikiAccessListActive$Params } from './fn/wiki-access/wiki-access-list-active';
 export { wikiAccessListActive as wikiAccessListActive } from './fn/wiki-access/wiki-access-list-active';
 export type { WikiAccessHistory$Params as WikiAccessHistory$Params } from './fn/wiki-access/wiki-access-history';

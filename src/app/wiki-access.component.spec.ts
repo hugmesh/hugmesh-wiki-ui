@@ -2,7 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 
 import { WikiAccessComponent } from './wiki-access.component';
-import { WikiService, WikiAccess, WikiApiError } from './wiki.service';
+import { WikiService, WikiAccess, WikiApiError, BrandCatalog } from './wiki.service';
 import { SessionService } from './session.service';
 
 function access(over: Partial<WikiAccess> = {}): WikiAccess {
@@ -22,11 +22,16 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
 
   beforeEach(async () => {
     canManage.set(false);
-    wiki = jasmine.createSpyObj<WikiService>('WikiService', ['grant', 'timeout', 'ban', 'revoke', 'observedBrands']);
+    wiki = jasmine.createSpyObj<WikiService>('WikiService',
+      ['grant', 'timeout', 'ban', 'revoke', 'observedBrands', 'brandCatalog']);
     // The brand suggestions are a convenience the field works without; default the
     // double to "nothing observed" so every pre-existing spec keeps exercising the
     // free-text path exactly as before.
     wiki.observedBrands.and.resolveTo([]);
+    // ...and default the CATALOGUE read to DENIED, so those same pre-existing specs are
+    // explicitly the catalogue-unavailable fallback rather than accidentally it. The
+    // authoritative-picker specs opt in by resolving this instead (see `catalog()` below).
+    wiki.brandCatalog.and.rejectWith(new WikiApiError(403, 'not a superadmin'));
     await TestBed.configureTestingModule({
       imports: [WikiAccessComponent],
       providers: [
@@ -120,8 +125,15 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
         .toBeNull();
     });
 
-    it('is offered to a SUPERADMIN, with a label + describedby help (a11y)', () => {
+    it('is offered to a SUPERADMIN, with a label + describedby help (a11y)', async () => {
+      // Rendered as a SUPERADMIN from the start: the control's shape is decided by the
+      // catalogue read that ngOnInit fires, so flipping the role afterwards on an ADMIN
+      // fixture would assert against a control that had never been decided.
       canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      await fixture.whenStable();
       fixture.detectChanges();
       const input = el().querySelector('[data-testid="wiki-access-target-domain"]')!;
       expect(input).not.toBeNull();
@@ -212,20 +224,27 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
     });
   });
 
-  // ── brand PICKER (issue #3 item 2) ──
+  // ── brand picker: the OBSERVED FALLBACK (issue #3 item 2) ──
   //
-  // The bff serves no known-brands endpoint, so the suggestions are OBSERVED
-  // (WikiService.observedBrands unions the two SUPERADMIN cross-domain reads).
-  // That is a subset of the server's registry, which is exactly why this is a
-  // datalist combobox and not a <select>: an unobserved brand must stay typeable,
-  // and the bff's 400 stays the real gate.
-  describe('target-brand picker', () => {
+  // Every spec in here runs with the catalogue read DENIED (the beforeEach default),
+  // which is the branch that keeps a SUPERADMIN able to act when
+  // GET /bff/wiki/superadmin/brands cannot be read. There the suggestions are OBSERVED
+  // (WikiService.observedBrands unions the two SUPERADMIN cross-domain reads): a subset
+  // of the server's registry, which is exactly why THIS mode is a datalist combobox and
+  // not a <select> — an unobserved brand must stay typeable, and the bff's 400 stays the
+  // real gate. The authoritative picker is the describe below.
+  describe('target-brand picker — observed fallback (catalogue unavailable)', () => {
     /** Re-create the fixture with canManage already true, so ngOnInit sees the
-     *  SUPERADMIN role (the beforeEach above renders as a scoped ADMIN). */
+     *  SUPERADMIN role (the beforeEach above renders as a scoped ADMIN).
+     *
+     *  Settled TWICE on purpose: this mode is reached by two SEQUENTIAL reads — the
+     *  catalogue read has to fail before the observed read is even started — so one
+     *  stabilisation lands between them, with the datalist still empty. */
     async function renderAsSuperadmin(): Promise<void> {
       canManage.set(true);
       fixture = TestBed.createComponent(WikiAccessComponent);
       fixture.detectChanges();
+      await fixture.whenStable();
       await fixture.whenStable();
       fixture.detectChanges();
     }
@@ -461,6 +480,420 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
       expect(options())
         .withContext('the 400 is precisely the server saying this brand does not exist')
         .toEqual([]);
+    });
+
+    it('says the suggestions are still loading, rather than looking like there are none', async () => {
+      // The combobox is on screen the moment the catalogue is known unavailable, with its
+      // suggestions still outstanding. Without this line the operator cannot tell "not read
+      // yet" from "this console has never seen a brand" — and `brandsLoading` was left
+      // write-only dead state when the template was rewritten around the five modes.
+      wiki.brandCatalog.and.rejectWith(new WikiApiError(503, 'upstream down'));
+      wiki.observedBrands.and.returnValue(new Promise<string[]>(() => {}));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]')).not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-brands-loading-suggestions"]'))
+        .withContext('brandsLoading is rendered again, in the one mode that has a second read')
+        .not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-brands-none"]'))
+        .withContext('"none observed" is a different fact from "not read yet"').toBeNull();
+    });
+  });
+
+  // ── brand picker: the AUTHORITATIVE catalogue (issue #3 item 2, unblocked by the
+  //    operator's "yes — multi-brand wiki IS in launch scope") ──
+  //
+  // GET /bff/wiki/superadmin/brands (hugmesh-wiki-bff-api#12) serves the registry the bff
+  // validates a submitted targetDomain against, so the control can finally be a CLOSED
+  // select. The one rule every spec here defends: never offer a brand the server will not
+  // honour — a picker whose choice is discarded is worse than no picker.
+  describe('target-brand picker — authoritative catalogue', () => {
+    function catalog(over: Partial<BrandCatalog> = {}): BrandCatalog {
+      return { brands: [], launchDomain: null, targetDomainHonoured: true, ...over };
+    }
+
+    /** Settled twice so the one spec in here that takes the FALLBACK branch (two
+     *  sequential reads) settles on the same helper as the rest. */
+    async function renderAsSuperadmin(): Promise<void> {
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+
+    function selectOptions(): string[] {
+      return Array.from(
+        el().querySelectorAll('[data-testid="wiki-access-target-domain-select"] option'),
+      ).map((o) => (o as HTMLOptionElement).value);
+    }
+
+    it('does not read the catalogue for a scoped ADMIN (it would 403, and the field is inert)', () => {
+      expect(wiki.brandCatalog).not.toHaveBeenCalled();
+    });
+
+    it('renders a CLOSED select over the catalogue, not a typeable combobox', async () => {
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme', 'globex'] }));
+      await renderAsSuperadmin();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]'))
+        .withContext('the server list is complete, so the control can be closed').not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]'))
+        .withContext('and the free-text fallback must NOT also be on screen').toBeNull();
+      expect(selectOptions()).toEqual(['', 'acme', 'globex']);
+    });
+
+    it('does not fall back to observation when the catalogue answered', async () => {
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme'] }));
+      await renderAsSuperadmin();
+      expect(wiki.observedBrands)
+        .withContext('a complete list must not be diluted with a partial one')
+        .not.toHaveBeenCalled();
+    });
+
+    it('preselects the domain the wiki is LAUNCHED on, and marks it', async () => {
+      wiki.brandCatalog.and.resolveTo(
+        catalog({ brands: ['acme', 'hugmesh'], launchDomain: 'hugmesh' }),
+      );
+      await renderAsSuperadmin();
+      expect(fixture.componentInstance.targetDomain()).toBe('hugmesh');
+      const marked = Array.from(
+        el().querySelectorAll('[data-testid="wiki-access-target-domain-select"] option'),
+      ).find((o) => (o as HTMLOptionElement).value === 'hugmesh')!;
+      expect(marked.textContent).toContain('this wiki');
+    });
+
+    it('does NOT preselect a launch domain the server would reject', async () => {
+      // 2+ brands: there is no single launch domain, so the bff reports its `hugmesh`
+      // fallback — which is not a configured brand here. Preselecting it would preselect a
+      // guaranteed 400, which is exactly the failure this whole control exists to prevent.
+      wiki.brandCatalog.and.resolveTo(
+        catalog({ brands: ['acme', 'globex'], launchDomain: 'hugmesh' }),
+      );
+      await renderAsSuperadmin();
+      expect(fixture.componentInstance.targetDomain()).toBe('');
+      expect(selectOptions()).not.toContain('hugmesh');
+    });
+
+    it('blocks submit until a brand is chosen, inline — the bff 400s without one', async () => {
+      wiki.brandCatalog.and.resolveTo(
+        catalog({ brands: ['acme', 'globex'], launchDomain: 'hugmesh' }),
+      );
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      await c.submit();
+      expect(wiki.grant).not.toHaveBeenCalled();
+      expect(c.targetInvalid()).toBeTrue();
+      fixture.detectChanges();
+      expect(el().querySelector('#wiki-access-target-domain-err')).not.toBeNull();
+    });
+
+    it('sends the chosen brand once one is picked', async () => {
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme', 'globex'] }));
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      c.targetDomain.set('globex');
+      wiki.grant.and.resolveTo(access({ domain: 'globex' }));
+      await c.submit();
+      expect(wiki.grant).toHaveBeenCalledWith({
+        userSubject: 'u', reason: undefined, targetDomain: 'globex',
+      });
+    });
+
+    it("keeps an operator's own pick when the catalogue lands after it", async () => {
+      let land!: (c: BrandCatalog) => void;
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>((res) => { land = res; }));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      fixture.componentInstance.targetDomain.set('globex');
+      land(catalog({ brands: ['acme', 'globex'], launchDomain: 'acme' }));
+      await fixture.whenStable();
+      expect(fixture.componentInstance.targetDomain())
+        .withContext('a valid pick outranks the launch-domain default')
+        .toBe('globex');
+    });
+
+    it('says so, and blocks, when the server accepts a brand but reports none', async () => {
+      // Reachable: two issuers both mapped to `default` are two entries but zero offerable
+      // brands. A superadmin genuinely cannot apply a change there, and an empty select
+      // that silently never submits would be worse than saying it.
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: [] }));
+      await renderAsSuperadmin();
+      expect(el().querySelector('[data-testid="wiki-access-brands-catalog-empty"]')).not.toBeNull();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      await c.submit();
+      expect(wiki.grant).not.toHaveBeenCalled();
+    });
+
+    // ── the two INERT shapes: the bff does not read targetDomain at all ──
+
+    it('renders NO control, and sends no brand, on a single-brand deployment', async () => {
+      wiki.brandCatalog.and.resolveTo(
+        catalog({ brands: [], launchDomain: 'hugmesh', targetDomainHonoured: false }),
+      );
+      await renderAsSuperadmin();
+      expect(el().querySelector('[data-testid="wiki-access-brands-inert"]')).not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]')).toBeNull();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      wiki.grant.and.resolveTo(access());
+      await c.submit();
+      expect(wiki.grant).toHaveBeenCalledWith({ userSubject: 'u', reason: undefined });
+    });
+
+    it('WARNS instead of offering a control when the server has a brand but discards the field', async () => {
+      // Exactly one configured issuer: users resolve `hugmesh`, but a superadmin write is
+      // stamped `default`, so the change never matches them (hugmesh-wiki-bff-api#21).
+      wiki.brandCatalog.and.resolveTo(
+        catalog({ brands: ['hugmesh'], launchDomain: 'hugmesh', targetDomainHonoured: false }),
+      );
+      await renderAsSuperadmin();
+      const warn = el().querySelector('[data-testid="wiki-access-brands-inert-mismatch"]')!;
+      expect(warn).not.toBeNull();
+      expect(warn.textContent).toContain('hugmesh');
+      expect(warn.textContent).toContain('may not take effect');
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]'))
+        .withContext('a control here would promise a choice the server throws away').toBeNull();
+    });
+
+    it('does not send a brand the server has told us it discards, even if one is set', async () => {
+      wiki.brandCatalog.and.resolveTo(
+        catalog({ brands: ['hugmesh'], targetDomainHonoured: false }),
+      );
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.targetDomain.set('hugmesh');   // as if left over from before the catalogue answered
+      c.userSubject.set('u');
+      wiki.grant.and.resolveTo(access({ domain: 'default' }));
+      await c.submit();
+      expect(wiki.grant)
+        .withContext('sending it would make the audit log read as a targeted write')
+        .toHaveBeenCalledWith({ userSubject: 'u', reason: undefined });
+    });
+
+    it('clears a stale typed brand when the catalogue says the field is discarded', async () => {
+      let land!: (c: BrandCatalog) => void;
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>((res) => { land = res; }));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      fixture.componentInstance.targetDomain.set('hugmesh');
+      land(catalog({ brands: ['hugmesh'], targetDomainHonoured: false }));
+      await fixture.whenStable();
+      expect(fixture.componentInstance.targetDomain()).toBe('');
+    });
+
+    it('does not grow the authoritative list from an applied row', async () => {
+      // learnBrand exists for the observed fallback. Folding into a complete list could only
+      // ADD something the server deliberately left out of it.
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme'] }));
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      c.targetDomain.set('acme');
+      wiki.grant.and.resolveTo(access({ domain: 'smuggled' }));
+      await c.submit();
+      fixture.detectChanges();
+      expect(selectOptions()).toEqual(['', 'acme']);
+    });
+
+    it('falls back to the observed combobox when the catalogue read fails', async () => {
+      wiki.brandCatalog.and.rejectWith(new WikiApiError(503, 'upstream down'));
+      wiki.observedBrands.and.resolveTo(['branda']);
+      await renderAsSuperadmin();
+      expect(wiki.observedBrands).toHaveBeenCalled();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]'))
+        .withContext('losing the control entirely would leave a superadmin unable to act')
+        .not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-error"]'))
+        .withContext('a missing brand list is not an error the operator can act on').toBeNull();
+    });
+
+    it('shows the fallback combobox as soon as the catalogue is known unavailable, before its suggestions land', async () => {
+      // The mode is decided by the catalogue read FAILING, not by the observed read
+      // finishing. Waiting for the suggestions would leave the operator staring at a
+      // loading placeholder with a perfectly usable free-text field withheld behind it.
+      wiki.brandCatalog.and.rejectWith(new WikiApiError(503, 'upstream down'));
+      wiki.observedBrands.and.returnValue(new Promise<string[]>(() => {}));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]'))
+        .withContext('usable now, with the suggestions still outstanding').not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-brands-loading"]')).toBeNull();
+    });
+
+    it('renders no control at all while the catalogue is still in flight', async () => {
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>(() => {}));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      expect(el().querySelector('[data-testid="wiki-access-brands-loading"]')).not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]'))
+        .withContext('a free-text box that turns into a closed select under a half-typed '
+          + 'value is how a typed brand gets silently discarded')
+        .toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]')).toBeNull();
+    });
+
+    // ── the control must never be LOST: `loading` renders nothing, so every way of
+    //    staying in it forever is a superadmin with less than the pre-catalogue console
+    //    gave them. Two ways existed, and both are closed below. ──
+
+    it('renders the control when the SESSION gains SUPERADMIN after this component initialised', async () => {
+      // showTargetDomain is session.canManage, a LIVE signal: SessionService re-reads
+      // hug.session on its same-document broadcast and on a cross-tab `storage` event. An
+      // ngOnInit `if` sampled it exactly once, so a role that arrived a moment later left
+      // the template's @if on with the mode stuck at `loading` — no control, forever.
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme', 'globex'], launchDomain: 'acme' }));
+      expect(wiki.brandCatalog)
+        .withContext('the beforeEach fixture is a scoped ADMIN: no field, no read')
+        .not.toHaveBeenCalled();
+
+      canManage.set(true);          // the host shell (or another tab) writes a superadmin session
+      fixture.detectChanges();
+      await fixture.whenStable();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(wiki.brandCatalog).toHaveBeenCalled();
+      expect(fixture.componentInstance.brandMode()).toBe('picker');
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-brands-loading"]')).toBeNull();
+    });
+
+    it('stops waiting for a catalogue that never answers, and falls back to the combobox', async () => {
+      // A REJECTED read already fell back. A HUNG one (no response, connection held open)
+      // had no timeout and no retry, so the field stayed at "Loading the brands this server
+      // accepts…" with no control at all — strictly worse than before the endpoint existed.
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>(() => {}));
+      wiki.observedBrands.and.resolveTo(['branda']);
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.componentInstance.catalogueDeadlineMs = 10;   // drive it; do not wait out the real one
+      fixture.detectChanges();
+      expect(el().querySelector('[data-testid="wiki-access-brands-loading"]'))
+        .withContext('still honestly loading before the deadline').not.toBeNull();
+
+      await new Promise((r) => setTimeout(r, 40));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(fixture.componentInstance.brandMode()).toBe('observed');
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]'))
+        .withContext('a usable free-text field, exactly what main gave a superadmin')
+        .not.toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-brands-loading"]')).toBeNull();
+    });
+
+    it('does not swap the combobox out from under a half-typed brand when the catalogue answers late', async () => {
+      // The deadline decided the shape. Letting a late answer re-decide it would recreate
+      // the exact hazard `loading` renders no control to avoid.
+      let land!: (c: BrandCatalog) => void;
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>((res) => { land = res; }));
+      wiki.observedBrands.and.resolveTo([]);
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.componentInstance.catalogueDeadlineMs = 10;
+      fixture.detectChanges();
+      await new Promise((r) => setTimeout(r, 40));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      fixture.componentInstance.targetDomain.set('half-typed');
+      land(catalog({ brands: ['acme'], launchDomain: 'acme' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(fixture.componentInstance.brandMode()).toBe('observed');
+      expect(fixture.componentInstance.targetDomain()).toBe('half-typed');
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).toBeNull();
+    });
+
+    it('REPLACES a brand learnt while the catalogue was loading — it never folds into it', async () => {
+      // learnBrand is deliberately allowed during `loading` (the read is not awaited, so a
+      // write can land first). The catalogue's answer is AUTHORITATIVE and must SET the
+      // list over it: folding would leave an option the server deliberately left out.
+      let land!: (c: BrandCatalog) => void;
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>((res) => { land = res; }));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      wiki.grant.and.resolveTo(access({ domain: 'learnt-while-loading' }));
+      await c.submit();
+      expect(c.brandOptions()).toContain('learnt-while-loading');
+
+      land(catalog({ brands: ['acme'], launchDomain: 'acme' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(c.brandOptions()).toEqual(['acme']);
+      expect(selectOptions())
+        .withContext('an option the server did not offer is a guaranteed 400')
+        .toEqual(['', 'acme']);
+    });
+
+    it('renders the PICKER, not the warning, as soon as the server honours ONE brand', async () => {
+      // FORWARD COMPATIBILITY with hugmesh-wiki-bff-api#21, which the operator answered on
+      // 2026-09-16 ("Fix: stamp the configured brand"): at exactly one configured pair the
+      // bff's targetDomainHonoured moves from false to TRUE, and this console must follow
+      // it into `picker` with no code change here. That holds only because the mode is
+      // derived from the FLAG first — a count is used solely to tell the two inert shapes
+      // apart — which is precisely the risk the #21 hand-off asked this repo to pin.
+      wiki.brandCatalog.and.resolveTo(
+        catalog({ brands: ['acme'], launchDomain: 'acme', targetDomainHonoured: true }),
+      );
+      await renderAsSuperadmin();
+      expect(fixture.componentInstance.brandMode()).toBe('picker');
+      expect(el().querySelector('[data-testid="wiki-access-brands-inert-mismatch"]'))
+        .withContext('warning that the server discards a field it now honours')
+        .toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).not.toBeNull();
+      expect(fixture.componentInstance.targetDomain()).toBe('acme');
+    });
+
+    // ── a11y of the required picker ──
+
+    it('advertises the requirement up front, and stays quiet until the operator acts', async () => {
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme', 'globex'] }));
+      await renderAsSuperadmin();
+      const select = el().querySelector('[data-testid="wiki-access-target-domain-select"]')!;
+      expect(select.getAttribute('aria-required'))
+        .withContext('the requirement lived only in formValid(), so a screen reader got no '
+          + 'advance signal at all')
+        .toBe('true');
+      expect(select.getAttribute('aria-invalid'))
+        .withContext('nothing is wrong yet — the operator has not interacted').toBe('false');
+      expect(select.getAttribute('aria-describedby'))
+        .withContext('must not name the error id while that element does not exist')
+        .toBe('wiki-access-target-domain-help');
+      expect(el().querySelector('#wiki-access-target-domain-err')).toBeNull();
+    });
+
+    it('marks the select invalid and points at the error once a submit is refused', async () => {
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme', 'globex'] }));
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+      await c.submit();
+      fixture.detectChanges();
+      const select = el().querySelector('[data-testid="wiki-access-target-domain-select"]')!;
+      expect(select.getAttribute('aria-invalid')).toBe('true');
+      expect(select.getAttribute('aria-describedby'))
+        .toBe('wiki-access-target-domain-help wiki-access-target-domain-err');
+      expect(el().querySelector('#wiki-access-target-domain-err')).not.toBeNull();
     });
   });
 });

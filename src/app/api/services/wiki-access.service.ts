@@ -11,8 +11,11 @@ import { StrictHttpResponse } from '../strict-http-response';
 
 import { Access } from '../models/access';
 import { AccessList } from '../models/access-list';
+import { Brands } from '../models/brands';
 import { wikiAccessBan } from '../fn/wiki-access/wiki-access-ban';
 import { WikiAccessBan$Params } from '../fn/wiki-access/wiki-access-ban';
+import { wikiAccessBrands } from '../fn/wiki-access/wiki-access-brands';
+import { WikiAccessBrands$Params } from '../fn/wiki-access/wiki-access-brands';
 import { wikiAccessGrant } from '../fn/wiki-access/wiki-access-grant';
 import { WikiAccessGrant$Params } from '../fn/wiki-access/wiki-access-grant';
 import { wikiAccessHistory } from '../fn/wiki-access/wiki-access-history';
@@ -131,6 +134,39 @@ export class WikiAccessService extends BaseService {
   wikiAccessBan(params: WikiAccessBan$Params, context?: HttpContext): Promise<Access> {
     const resp = this.wikiAccessBan$Response(params, context);
     return resp.then((r: StrictHttpResponse<Access>): Access => r.body);
+  }
+
+  /** Path part for operation `wikiAccessBrands()` */
+  static readonly WikiAccessBrandsPath = '/bff/wiki/superadmin/brands';
+
+  /**
+   * The BRAND CATALOGUE for the target-brand picker: every value this bff accepts as targetDomain, the domain the wiki is launched on, and whether targetDomain is consulted at all. SUPERADMIN.
+   *
+   * Serves the authoritative brand set the SUPERADMIN cross-brand writes are validated against, so the console can offer a PICKER instead of free text. Backed by the same DomainRegistry the write path validates against: <ul><li><code>brands</code> — DomainRegistry.knownDomains() filtered through DomainRegistry.isKnownDomain, i.e. exactly the values a grant/timeout/ban may name in targetDomain. Sorted. Empty on a single-issuer deployment.</li><li><code>launchDomain</code> — the domain this wiki is launched on, from the same derivation the 007 re-stamp target uses; falls back to <code>hugmesh</code>. NOT necessarily a member of <code>brands</code>: on a 2+-brand deployment there is no single launch domain, so check membership before preselecting it.</li><li><code>targetDomainHonoured</code> — false when fewer than two issuers are configured, where WikiAccessService.writeDomain ignores the field and stamps <code>default</code> regardless of the body.</li></ul>No new disclosure: a SUPERADMIN is cross-domain by definition and can already read every brand's access rows and audit trail.<table><tr><th>Role</th><th>Permitted</th><th>Scope</th></tr><tr><td>SUPERADMIN</td><td>Yes</td><td>All brands</td></tr><tr><td>ADMIN / MOD / USER</td><td>No</td><td>—</td></tr></table>
+   *
+   * This method provides access to the full `HttpResponse`, allowing access to response headers.
+   * To access only the response body, use `wikiAccessBrands()` instead.
+   *
+   * This method doesn't expect any request body.
+   */
+  wikiAccessBrands$Response(params?: WikiAccessBrands$Params, context?: HttpContext): Promise<StrictHttpResponse<Brands>> {
+    const obs = wikiAccessBrands(this.http, this.rootUrl, params, context);
+    return firstValueFrom(obs);
+  }
+
+  /**
+   * The BRAND CATALOGUE for the target-brand picker: every value this bff accepts as targetDomain, the domain the wiki is launched on, and whether targetDomain is consulted at all. SUPERADMIN.
+   *
+   * Serves the authoritative brand set the SUPERADMIN cross-brand writes are validated against, so the console can offer a PICKER instead of free text. Backed by the same DomainRegistry the write path validates against: <ul><li><code>brands</code> — DomainRegistry.knownDomains() filtered through DomainRegistry.isKnownDomain, i.e. exactly the values a grant/timeout/ban may name in targetDomain. Sorted. Empty on a single-issuer deployment.</li><li><code>launchDomain</code> — the domain this wiki is launched on, from the same derivation the 007 re-stamp target uses; falls back to <code>hugmesh</code>. NOT necessarily a member of <code>brands</code>: on a 2+-brand deployment there is no single launch domain, so check membership before preselecting it.</li><li><code>targetDomainHonoured</code> — false when fewer than two issuers are configured, where WikiAccessService.writeDomain ignores the field and stamps <code>default</code> regardless of the body.</li></ul>No new disclosure: a SUPERADMIN is cross-domain by definition and can already read every brand's access rows and audit trail.<table><tr><th>Role</th><th>Permitted</th><th>Scope</th></tr><tr><td>SUPERADMIN</td><td>Yes</td><td>All brands</td></tr><tr><td>ADMIN / MOD / USER</td><td>No</td><td>—</td></tr></table>
+   *
+   * This method provides access only to the response body.
+   * To access the full response (for headers, for example), `wikiAccessBrands$Response()` instead.
+   *
+   * This method doesn't expect any request body.
+   */
+  wikiAccessBrands(params?: WikiAccessBrands$Params, context?: HttpContext): Promise<Brands> {
+    const resp = this.wikiAccessBrands$Response(params, context);
+    return resp.then((r: StrictHttpResponse<Brands>): Brands => r.body);
   }
 
   /** Path part for operation `wikiAccessListActive()` */

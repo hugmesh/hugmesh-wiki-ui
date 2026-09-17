@@ -178,7 +178,28 @@ async function fillAccess(
   await page.fill('[data-testid="wiki-access-user"]', subject);
   if (opts.reason) await page.fill('[data-testid="wiki-access-reason"]', opts.reason);
   if (opts.targetDomain !== undefined) {
-    await page.fill('[data-testid="wiki-access-target-domain"]', opts.targetDomain);
+    // TWO possible controls, decided at runtime by the bff's brand catalogue
+    // (GET /bff/wiki/superadmin/brands, hugmesh-wiki-bff-api#12):
+    //   - a closed <select> when the catalogue answered and the bff honours targetDomain;
+    //   - the free-text combobox when that read failed, which is the pre-catalogue
+    //     behaviour and the only path that can carry a brand the server does not know.
+    // Neither is present at all when the catalogue says targetDomain is ignored — see the
+    // note on the unknown-brand scenario in cross-brand-target-domain.feature.
+    //
+    // WAIT FOR ONE OF THEM FIRST. `count()` is a NON-waiting snapshot, and the console
+    // renders NEITHER control while the catalogue read is in flight (BrandMode `loading`).
+    // The navigation step only waits for `domcontentloaded`, so branching on a bare
+    // `count()` races that read: it would see 0, take the free-text arm, and time out
+    // filling a combobox that never appears in picker mode. `or()` settles on whichever
+    // control the deployment actually renders.
+    const picker = page.locator('[data-testid="wiki-access-target-domain-select"]');
+    const textbox = page.locator('[data-testid="wiki-access-target-domain"]');
+    await expect(picker.or(textbox).first()).toBeVisible({ timeout: 15_000 });
+    if ((await picker.count()) > 0) {
+      await picker.selectOption(opts.targetDomain);
+    } else {
+      await textbox.fill(opts.targetDomain);
+    }
   }
   await page.click('[data-testid="wiki-access-submit"]');
 }
@@ -201,14 +222,22 @@ When(
   },
 );
 
-When('{string} grants read access to {string} in an unknown brand', async ({ user }, actor: string, target: string) => {
-  const page = pageOf(user(actor).username);
-  // A brand the BFF's trusted DomainRegistry cannot resolve → fail-closed 400.
-  await fillAccess(page, 'grant', subjectFor(user(target)), {
-    reason: 'e2e unknown-brand',
-    targetDomain: 'no-such-brand-zzz',
-  });
-});
+Then(
+  '{string} is offered brand {string} and NOT {string}',
+  async ({ user }, actor: string, offered: string, unknown: string) => {
+    // What replaced the old "name an unknown brand, read back the verbatim 400" scenario:
+    // on a multi-brand stack the control is now a CLOSED select whose options are the
+    // bff's own registry, so an unknown brand cannot be named from this screen at all.
+    // This asserts the property that REPLACED it, end to end through the gateway: the
+    // catalogue read really is reachable and really is the server's list.
+    const page = pageOf(user(actor).username);
+    const picker = page.locator('[data-testid="wiki-access-target-domain-select"]');
+    await expect(picker).toBeVisible({ timeout: 15_000 });
+    await expect(picker.locator(`option[value="${offered}"]`)).toHaveCount(1);
+    await expect(picker.locator(`option[value="${unknown}"]`))
+      .toHaveCount(0);
+  },
+);
 
 Then(
   '{string} sees the access result type {string} and state {string}',
@@ -228,6 +257,11 @@ Then('{string} sees the access result brand {string}', async ({ user }, username
   });
 });
 
+// NOTE: currently referenced by no scenario — the one that used it named an unknown brand
+// from the target control, which the issue-#3 picker makes impossible on a multi-brand stack
+// (see cross-brand-target-domain.feature). Kept, not deleted: the contract it drives (the
+// bff's message verbatim, never the generic client retry copy) is still the console's
+// behaviour, and re-pointing a scenario at it is cheaper than rewriting it.
 Then('{string} sees a verbatim server access error', async ({ user }, username: string) => {
   // The fail-closed 400 (WikiAccessService.writeDomain) is surfaced verbatim, so
   // the error is present AND is NOT the generic "try again" fallback the client

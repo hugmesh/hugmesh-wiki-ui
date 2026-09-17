@@ -456,13 +456,107 @@ describe('WikiService — attachments (delegates to the generated client over Ht
 });
 
 /**
- * BRAND SUGGESTIONS — {@link WikiService.observedBrands}, the client half of the
- * issue-#3 brand picker. The wiki-bff serves NO known-brands endpoint (its
- * DomainRegistry is never exposed), so this unions the server-stamped `domain`
- * of the two SUPERADMIN cross-domain reads the console already makes. The specs
- * pin the two properties the picker depends on: it is a SUBSET (so the field
- * must stay typeable) and it NEVER rejects (so absent suggestions are not an
- * error the operator is asked to act on).
+ * BRAND CATALOGUE — {@link WikiService.brandCatalog}, the AUTHORITATIVE half of the issue-#3
+ * picker. `GET /bff/wiki/superadmin/brands` (hugmesh-wiki-bff-api#12) serves the very
+ * registry the bff validates a submitted `targetDomain` against, which is what lets the
+ * console render a closed select instead of free text.
+ *
+ * The specs pin the properties the picker depends on, and they are the OPPOSITE of
+ * {@link WikiService.observedBrands}' on two counts: this list is COMPLETE, and this read
+ * REJECTS. "The server denied the catalogue" and "the server says there are no brands" are
+ * different facts that the console renders differently, so they must not collapse into one.
+ */
+describe('WikiService — brand catalogue (the authority behind the picker)', () => {
+  let service: WikiService;
+  let httpMock: HttpTestingController;
+  const sessionSig = signal<SnapSession | null>(adminSession());
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [
+        WikiService,
+        { provide: SessionService, useValue: { session: sessionSig } },
+        { provide: WIKI_BASE_URL, useValue: '' },
+        provideHttpClient(withInterceptors([authInterceptor])),
+        provideHttpClientTesting(),
+      ],
+    });
+    service = TestBed.inject(WikiService);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => httpMock.verify());
+
+  it('GETs the catalogue with the session cookie and returns all three fields', async () => {
+    const promise = service.brandCatalog();
+    const req = httpMock.expectOne('/bff/wiki/superadmin/brands');
+    expect(req.request.method).toBe('GET');
+    expect(req.request.withCredentials)
+      .withContext('the HttpOnly bff_ cookie is the only credential the browser holds')
+      .toBeTrue();
+    req.flush({ brands: ['acme', 'globex'], launchDomain: 'hugmesh', targetDomainHonoured: true });
+    expect(await promise).toEqual({
+      brands: ['acme', 'globex'], launchDomain: 'hugmesh', targetDomainHonoured: true,
+    });
+  });
+
+  it('applies the SAME sentinel filter as the observed source', async () => {
+    // The server already filters these out, so this is defence in depth — but if a
+    // server-side regression ever started emitting `default`, the picker would offer a
+    // guaranteed 400, which is the one thing it exists to prevent.
+    const promise = service.brandCatalog();
+    httpMock.expectOne('/bff/wiki/superadmin/brands')
+      .flush({ brands: ['default', '__deny__', '  ', ' acme ', 7], targetDomainHonoured: true });
+    expect((await promise).brands).toEqual(['acme']);
+  });
+
+  it('de-duplicates, so two entries that normalise equal cannot become two options', async () => {
+    // Symmetric with observedBrands (which unions into a Set). Unreachable through today's
+    // bff — DomainRegistry sanitizes brands and returns a LinkedHashSet — which is exactly
+    // why being symmetric here is cheap rather than depending on that.
+    const promise = service.brandCatalog();
+    httpMock.expectOne('/bff/wiki/superadmin/brands')
+      .flush({ brands: ['acme', ' acme ', 'globex'], targetDomainHonoured: true });
+    expect((await promise).brands).toEqual(['acme', 'globex']);
+  });
+
+  it('treats every field as optional, because the generated model marks them so', async () => {
+    const promise = service.brandCatalog();
+    httpMock.expectOne('/bff/wiki/superadmin/brands').flush({});
+    expect(await promise).toEqual({ brands: [], launchDomain: null, targetDomainHonoured: false });
+  });
+
+  it('only honours targetDomain on a literal true, never on a truthy value', async () => {
+    const promise = service.brandCatalog();
+    httpMock.expectOne('/bff/wiki/superadmin/brands')
+      .flush({ brands: ['acme'], targetDomainHonoured: 'yes' });
+    expect((await promise).targetDomainHonoured)
+      .withContext('rendering a live picker on a coerced string would offer a discarded choice')
+      .toBeFalse();
+  });
+
+  it('REJECTS on a denial — unlike observedBrands, which degrades silently', async () => {
+    const promise = service.brandCatalog();
+    httpMock.expectOne('/bff/wiki/superadmin/brands')
+      .flush({ message: 'Access Denied' }, { status: 403, statusText: 'Forbidden' });
+    await expectAsync(promise).toBeRejectedWithError(WikiApiError, /Access Denied/);
+  });
+
+  it('rejects on a transient failure too, so the console can fall back rather than show none', async () => {
+    const promise = service.brandCatalog();
+    httpMock.expectOne('/bff/wiki/superadmin/brands')
+      .flush('boom', { status: 503, statusText: 'Service Unavailable' });
+    await expectAsync(promise).toBeRejected();
+  });
+});
+
+/**
+ * BRAND SUGGESTIONS — {@link WikiService.observedBrands}, now the FALLBACK half of the
+ * issue-#3 picker: what the console uses when the catalogue above cannot be read. It unions
+ * the server-stamped `domain` of the two SUPERADMIN cross-domain reads the console already
+ * makes. The specs pin the two properties that mode depends on: it is a SUBSET (so the field
+ * must stay typeable there) and it NEVER rejects (so absent suggestions are not an error the
+ * operator is asked to act on).
  */
 describe('WikiService — observed brands (the picker source, not an authority)', () => {
   let service: WikiService;
