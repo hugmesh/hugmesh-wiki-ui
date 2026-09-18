@@ -12,7 +12,8 @@
     "test": "ng test wiki --watch=false --browsers=ChromeHeadlessCI",
     "test:watch": "ng test wiki",
     "gen": "ng-openapi-gen",
-    "gen:spec": "cp \"${WIKI_BFF_SPEC:-../hugmesh-wiki-bff-api/src/main/resources/openapi/openapi.json}\" openapi.json && npm run gen"
+    "gen:spec": "cp \"${WIKI_BFF_SPEC:-../hugmesh-wiki-bff-api/src/main/resources/openapi/openapi.json}\" openapi.json && npm run gen",
+    "verify:spec": "node scripts/assert-spec-sync.mjs"
   },
   "dependencies": {
     "@angular-architects/native-federation": "^22.0.0",
