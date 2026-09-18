@@ -149,15 +149,45 @@ What the catalogue says decides which of five shapes the control takes
 
 | catalogue | control | why |
 | --- | --- | --- |
-| still loading | none, just "Loading the brands this server accepts…" | a free-text box that turns into a closed select underneath a half-typed value is how a typed brand gets silently discarded. **Bounded** — see below |
+| still loading | a **disabled** `<select>`, with the same label the picker gets, plus an announced "Loading the brands this server accepts…" | **operator decision 33b** — so the shape of the form stops moving under the operator. Disabled rather than typeable, so the original hazard (a free-text box that turns into a closed select underneath a half-typed value) is still avoided. **Bounded** — see below |
 | `targetDomainHonoured: true`, `brands` non-empty | a closed `<select>` over `brands` | the list is the server's own and complete |
 | `targetDomainHonoured: true`, `brands` empty | the same `<select>`, holding only its placeholder, plus a line saying no change can be applied here | reachable (two issuers both mapped to `default` are two entries but zero offerable brands). The server would reject every brand there, so submit stays blocked — but an empty control that silently never submits would be worse than saying so |
 | `targetDomainHonoured: false`, `brands` empty | none, one line of explanation | single-issuer deployment: every principal is `default`, so a SUPERADMIN write stamped `default` is *correct* and there is nothing to choose |
 | `targetDomainHonoured: false`, `brands` non-empty | none, a **warning** naming the brand | the hazard below |
 | the read failed **or did not answer in time** | the previous combobox over observed brands | losing the control entirely would leave a SUPERADMIN unable to act |
 
-**"Loading" is a bounded state, deliberately.** Because that mode renders *no* control,
-the read it waits on decides whether the operator has a control at all — so it cannot be
+**"Loading" renders a DISABLED control — operator decision 33b, 2026-09-17**
+(hugmesh-generator#347), taken *against* the recommendation. What shipped first was no
+control at all; the operator overruled it so that the form's shape stops moving under them,
+with a field appearing and pushing the rest of the form down at an unpredictable moment.
+The control is the same label and `<select>` the `picker` case draws, disabled and
+`aria-busy`, so it is filled in place rather than created.
+
+Four costs this carries, recorded rather than assumed, each pinned by a spec:
+
+1. A disabled control is **not focusable** and is skipped by keyboard and screen-reader
+   traversal, so the loading state has to be *announced* (`role="status"` +
+   `aria-live="polite"` on the help text, tied to the control by `aria-describedby`) rather
+   than merely drawn.
+2. It stabilises the shape only on the path that ends in `picker`. On the degrade path below
+   the control still changes **type**, from a `<select>` to a typeable `<input list>`.
+3. On a single-issuer deployment the read resolves to one of the two inert shapes, which
+   render no control — so there the disabled select **disappears** instead of filling in.
+4. **It only gets two thirds of the way.** The answer was chosen so the form's shape stops
+   moving; it stops the *control* moving, not the field. Measured in the real component with
+   the real stylesheet at 640px: the `<select>` is 37.00px before and after, but the
+   surrounding `.wiki-field` still grows 110.97px → 143.97px — **+33.00px** — against
+   +99.19px under the declined render-nothing shape. Every one of those 33px is the help
+   paragraph growing from one line to the picker's multi-sentence help, which carries the
+   brand count and the default hint. It **cannot simply be pre-sized**: that help is variable
+   height by design (49.00 / 48.00 / 32.00px for three honest catalogues, a 17px spread), so
+   a fixed placeholder would have to know the catalogue this mode is still waiting for.
+   Closing the residual means a visual decision nobody has made — reserve a fixed help
+   height, or move the count and default hint out of the help paragraph. The numbers are
+   printed by the spec that pins them, so they can be re-derived from a test run.
+
+**"Loading" is a bounded state, deliberately.** Because that mode renders a control nobody
+can use, the read it waits on decides whether the operator can act at all — so it cannot be
 allowed to wait forever. A read that has not answered within
 `WikiAccessComponent#catalogueDeadlineMs` (8s) degrades to the observed combobox exactly as
 a *rejected* read does, and a catalogue that answers after that deadline is ignored rather
@@ -174,6 +204,13 @@ launch domain and the BFF reports its fallback instead, so preselecting it blind
 preselect a guaranteed 400. An operator's own pick always outranks the default. When the
 picker is live it is also **required**, which catches the BFF's fail-closed 400 before the
 round-trip rather than after it.
+
+**Operator decision 33, 2026-09-17** (hugmesh-generator#347). The three behaviours above
+were all chosen by the implementer, not by the "yes" that authorised the picker, so they
+were put to the operator: **(33a) required, blocking submit inline** — ratified as built;
+**(33b) what renders while the catalogue read is in flight** — *overruled*, now a disabled
+control (above); **(33c) the 8-second degrade deadline** — ratified as built. 33a and 33c
+are pinned by specs that name the decision, so they cannot drift off the answer silently.
 
 **The warning case is a real defect on the server, not a UI nicety.** The BFF reads
 `targetDomain` only when `DomainRegistry.isMultiIssuer()`, which is *two or more*
