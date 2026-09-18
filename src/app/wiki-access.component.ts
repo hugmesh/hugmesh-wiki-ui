@@ -26,7 +26,7 @@ type AccessAction = 'grant' | 'timeout' | 'ban';
  *   appearing and pushing the rest of the form down at an unpredictable moment up to
  *   {@link catalogueDeadlineMs} later.
  *
- *   Three costs this carries, none of them removable inside this mode, all measured rather
+ *   FOUR costs this carries, none of them removable inside this mode, all measured rather
  *   than assumed (recorded on wiki-ui#3):
  *   1. A disabled control is NOT focusable and is skipped by keyboard and screen-reader
  *      traversal, so the "loading" state has to be ANNOUNCED (`role="status"` +
@@ -38,6 +38,19 @@ type AccessAction = 'grant' | 'timeout' | 'ban';
  *   3. On a single-issuer deployment the read resolves to `inert` / `inert-mismatch`, which
  *      render no control at all — so there the disabled select DISAPPEARS instead of filling
  *      in. Shape still moves, in the other direction.
+ *   4. IT IS NOT THE WHOLE JOURNEY. The chosen answer's purpose is that the form's shape
+ *      stops moving; it stops the CONTROL moving, and only two thirds of the field's
+ *      movement. Measured in this component with the real stylesheet at 640px: the
+ *      `<select>` is 37.00px before and after, but the surrounding `.wiki-field` still grows
+ *      110.97px → 143.97px, **+33.00px**, against +99.19px for the declined render-nothing
+ *      shape. All 33px of it is the help paragraph, which goes from one line to the picker's
+ *      multi-sentence help carrying the brand count and the default hint. It cannot simply be
+ *      pre-sized, because that help is VARIABLE height by design — 49.00 / 48.00 / 32.00px
+ *      for three honest catalogues, a 17px spread — so a fixed placeholder would have to know
+ *      the very catalogue this mode is waiting for. Closing it means a visual decision nobody
+ *      has made (reserve a fixed help height, or move the count and default hint out of the
+ *      help paragraph). Pinned, with the numbers, by the "DECISION 33b, the COST measured"
+ *      spec.
  *
  *   This mode is BOUNDED — a read that has not answered within `catalogueDeadlineMs` degrades
  *   to `observed`, because a control nobody can use must never be the resting state of a

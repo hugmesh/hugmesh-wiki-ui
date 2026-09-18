@@ -163,7 +163,7 @@ with a field appearing and pushing the rest of the form down at an unpredictable
 The control is the same label and `<select>` the `picker` case draws, disabled and
 `aria-busy`, so it is filled in place rather than created.
 
-Three costs this carries, recorded rather than assumed, each pinned by a spec:
+Four costs this carries, recorded rather than assumed, each pinned by a spec:
 
 1. A disabled control is **not focusable** and is skipped by keyboard and screen-reader
    traversal, so the loading state has to be *announced* (`role="status"` +
@@ -173,6 +173,18 @@ Three costs this carries, recorded rather than assumed, each pinned by a spec:
    the control still changes **type**, from a `<select>` to a typeable `<input list>`.
 3. On a single-issuer deployment the read resolves to one of the two inert shapes, which
    render no control — so there the disabled select **disappears** instead of filling in.
+4. **It only gets two thirds of the way.** The answer was chosen so the form's shape stops
+   moving; it stops the *control* moving, not the field. Measured in the real component with
+   the real stylesheet at 640px: the `<select>` is 37.00px before and after, but the
+   surrounding `.wiki-field` still grows 110.97px → 143.97px — **+33.00px** — against
+   +99.19px under the declined render-nothing shape. Every one of those 33px is the help
+   paragraph growing from one line to the picker's multi-sentence help, which carries the
+   brand count and the default hint. It **cannot simply be pre-sized**: that help is variable
+   height by design (49.00 / 48.00 / 32.00px for three honest catalogues, a 17px spread), so
+   a fixed placeholder would have to know the catalogue this mode is still waiting for.
+   Closing the residual means a visual decision nobody has made — reserve a fixed help
+   height, or move the count and default hint out of the help paragraph. The numbers are
+   printed by the spec that pins them, so they can be re-derived from a test run.
 
 **"Loading" is a bounded state, deliberately.** Because that mode renders a control nobody
 can use, the read it waits on decides whether the operator can act at all — so it cannot be
