@@ -92,9 +92,17 @@
 				"serve-original": {
 					"builder": "@angular-devkit/build-angular:dev-server",
 					"options": {
-						"buildTarget": "wiki:build",
 						"port": 4208
-					}
+					},
+					"configurations": {
+						"production": {
+							"buildTarget": "wiki:esbuild:production"
+						},
+						"development": {
+							"buildTarget": "wiki:esbuild:development"
+						}
+					},
+					"defaultConfiguration": "development"
 				},
 				"test": {
 					"builder": "@angular-devkit/build-angular:karma",
