@@ -1,24 +1,24 @@
 # hugmesh-wiki-ui — e2e (Playwright + playwright-bdd)
 
-Gherkin-driven end-to-end harness for the wiki-ui federated remote, copied from
-the proven `hugmesh-games/e2e` pattern (`@playwright/test` +
-`playwright-bdd`, single-worker serial, `screenshot:'on'`/`video:'on'`, HTML
-reporter, the per-step PNG `AfterStep` hook in
-`features/support/fixtures.ts`).
+A Gherkin-driven end-to-end harness for the wiki-ui federated remote. It
+copies the proven `hugmesh-games/e2e` pattern: `@playwright/test` +
+`playwright-bdd`, single worker run serially, `screenshot:'on'`/`video:'on'`,
+an HTML reporter, and the per-step PNG `AfterStep` hook in
+`features/support/fixtures.ts`.
 
-The wiki-ui is a native-federation **remote** mounted by the hugmesh.net
-host at `/wiki` (the host gates the whole mount behind route-access `ROLE_WIKI`);
-the **child guards** then enforce the per-view wiki role boundary. The role model
-(`src/app/session.service.ts`, mirroring `hugmesh-wiki-bff-api`
-`WikiController`):
+The hugmesh.net host mounts the wiki-ui, a native-federation **remote**, at
+`/wiki`. The host gates the whole mount behind route-access `ROLE_WIKI`. The
+**child guards** then enforce the wiki role boundary per view. The role model
+lives in `src/app/session.service.ts` and mirrors `hugmesh-wiki-bff-api`
+`WikiController`:
 
 - `wikiReadGuard`  — `WIKI_READ`  = ADMIN | SUPERADMIN | (MOD AND WIKI) → content
 - `wikiWriteGuard` — `WIKI_WRITE` = ADMIN | SUPERADMIN → new / edit / access
 - `wikiManageGuard`— `WIKI_MANAGE`= SUPERADMIN → manage (overrides / history / audit)
 
-A child-guard DENY routes to the **in-remote `/wiki/forbidden`** screen (not
-`/login`) — the host already authgated the user in, so a denial here is a
-within-wiki privilege boundary.
+A child-guard DENY sends the user to the **in-remote `/wiki/forbidden`** screen,
+not `/login`. The host already let the user in, so a denial here is a privilege
+boundary inside the wiki.
 
 | Class | Feature file | What it asserts |
 | --- | --- | --- |
@@ -31,8 +31,8 @@ within-wiki privilege boundary.
 
 ### Multi-user write-path coverage (two live identities per scenario)
 
-The affordance-visibility suite above never mutates anything; these prove the
-real write pipeline end to end with a writer + an independent second user:
+The affordance-visibility suite above changes nothing. These scenarios prove the
+real write pipeline end to end, with a writer and an independent second user:
 
 | Class | Feature file | What it asserts |
 | --- | --- | --- |
@@ -45,25 +45,26 @@ real write pipeline end to end with a writer + an independent second user:
 | MULTIUSER | `features/wiki/attachments-cross-role.feature` | an admin uploads (multipart); a same-domain MOD reader lists + downloads it (real download event, right filename) while their upload/delete controls are `aria-disabled` with the role helptext; the admin's delete empties the panel on reload |
 | USER-SITUATIONAL | `features/wiki/role-change-mid-session.feature` | an open admin tab downgraded to granted-MOD (the `hug-session-change` re-sync) drops the New/Access nav + `wiki-new-page` affordance and bounces the next guarded nav — no reload |
 
-The three coverage classes pair ALLOW + DENY for every wiki role
-(superadmin / admin / granted-mod / bare-mod / plain-user), exercising the subtle
-`(MOD AND WIKI)` AND-gate (a bare MOD without the `wiki` role is **not** a reader)
-and the disabled/hidden + helptext surface (the forbidden screen explains the
-missing role; the access console field help).
+The coverage classes pair ALLOW + DENY for every wiki role (superadmin / admin /
+granted-mod / bare-mod / plain-user). They exercise the subtle `(MOD AND WIKI)`
+AND-gate: a bare MOD without the `wiki` role is **not** a reader. They also
+exercise the disabled/hidden + helptext surface: the forbidden screen explains
+the missing role, and the access console has field help.
 
 ## Ships dark (wave 2b)
 
 Every scenario that needs a live stack (host shell serving the remote +
-wiki-bff + Casdoor seed) is tagged **`@cluster`** at the feature level. The
-default config filters them out (`tags: 'not @cluster'`), so the default run
-needs **no cluster** and the GitLab `e2e:bdd` job is `allow_failure: true`.
+wiki-bff + Casdoor seed) carries the **`@cluster`** tag at the feature level.
+The default config filters them out (`tags: 'not @cluster'`). The default run
+therefore needs **no cluster**, and the GitLab `e2e:bdd` job is
+`allow_failure: true`.
 
-`@cluster` is used deliberately instead of playwright-bdd's reserved `@skip`:
+The suite uses `@cluster` on purpose, not playwright-bdd's reserved `@skip`.
 `@skip` drops a scenario from generation entirely (`bddgen` emits 0 specs for
-it), so a `@skip`-tagged suite cannot be *discovered*. `@cluster` is a plain
-filter tag — the no-filter validation below generates and lists all 50
-scenarios, proving the Gherkin compiles, while the default config keeps them
-dark.
+it), so nobody can *discover* a `@skip`-tagged suite. `@cluster` is a plain
+filter tag. The no-filter validation below generates and lists all 50
+scenarios, which proves the Gherkin compiles, while the default config keeps
+them dark.
 
 ## Offline validation (no cluster)
 
@@ -90,13 +91,14 @@ rm pw-validate.config.ts
 ## Running against a live stack (later wave)
 
 Drop the `@cluster` tag from a feature (or run with an override config that
-omits the `not @cluster` filter), export `E2E_BASE_URL` + the per-role
-`E2E_*_PASSWORD` vars, then `npm run bdd`.
+omits the `not @cluster` filter), export `E2E_BASE_URL`, then run `npm run bdd`.
+Export the per-role `E2E_<ROLE>_PASSWORD` vars too if you want to override the
+seeded passwords.
 
 The per-user `E2E_<ROLE>_PASSWORD` and shared `E2E_PASSWORD` env vars are
-optional overrides, not requirements: `tests/helpers/roles.ts` (`passwordFor()`)
-falls back to the run-state `.e2e-credentials` file written by
-hugmesh-generator's `make stack-seed` (`$E2E_CREDENTIALS_FILE`, or a
+optional overrides, not requirements. `tests/helpers/roles.ts`
+(`passwordFor()`) falls back to the run-state `.e2e-credentials` file that
+hugmesh-generator's `make stack-seed` writes (`$E2E_CREDENTIALS_FILE`, or a
 `.e2e-credentials` found by walking up from cwd). There is no built-in literal
-password — if nothing resolves, the suite throws naming `make stack-seed`
-rather than silently authenticating with a guessable default.
+password. If nothing resolves, the suite throws and names `make stack-seed`,
+instead of quietly logging in with a guessable default.
