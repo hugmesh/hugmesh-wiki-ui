@@ -11,7 +11,8 @@ that keeps wiki content scoped per brand/domain.
 ## Federation contract
 
 The host shell's federation registry carries an entry for the wiki module
-that points at this remote. When the host shell loads it at startup, it reads:
+that points at this remote. The host reads the entry at startup and loads the
+remote when a user enters `/wiki`:
 
 | field | value |
 | --- | --- |
@@ -24,13 +25,14 @@ that points at this remote. When the host shell loads it at startup, it reads:
 This remote therefore:
 
 - exposes the module key **`./Wiki`** in `federation.config.js`, which maps to
-  `src/app/wiki.routes.ts` (`WIKI_ROUTES`). The host shell consumes this key via
-  `loadRemoteModule('wiki', './Wiki')`.
+  `src/app/wiki.routes.ts` (`WIKI_ROUTES`). The host shell route
+  (`{ path: 'wiki', remoteName: 'wiki', exposed: './Wiki', routesConst: 'WIKI_ROUTES' }`
+  in its `app.routes.ts`) loads this key through `loadRemoteModule`.
 - is served on **port 8080** (see `Dockerfile` and `nginx.conf`, built on
   `nginxinc/nginx-unprivileged`), so the emitted `remoteEntry.json` is
   reachable at the URL recorded in the registry.
-- is **internal** — it sits behind the gateway's `/wiki → ROLE_WIKI` route-access
-  guard and is never reachable as a public surface.
+- is **internal** — it sits behind the gateway's `/wiki/**` → `ROLE_WIKI`
+  route-access row and is never reachable as a public surface.
 
 `federation-base.js` is kept **byte-identical** to the `hugmesh.net` host
 shell's copy. This file is the single source of truth for the shared-dependency
@@ -53,7 +55,7 @@ sequenceDiagram
     else user has ROLE_WIKI
         Gateway->>WikiUI: proxy request
         WikiUI-->>Host: serve remoteEntry.json
-        Host->>Host: loadRemoteModule('wiki', './Wiki')
+        Host->>Host: loadRemoteModule (remote 'wiki', module './Wiki')
         Host-->>Browser: render wiki module
         Browser->>BFF: API calls via /bff/wiki/** (HttpOnly bff_ session cookie)
     end
@@ -66,6 +68,12 @@ The UI role checks mirror the capabilities enforced by `WikiController` in
 only; the BFF's `@PreAuthorize` annotations and `WikiAccessGuard` are
 authoritative. Every unauthorised API call returns a 403 that the UI surfaces
 gracefully.
+
+The host shell has its own `wikiGuard` (`src/app/guards/wiki.guard.ts` in
+`hugmesh-host-shell`). It admits ADMIN, SUPERADMIN, or MOD with `WIKI`, and
+sends everyone else to `/login`. The gateway's route-access rows are
+`/bff/wiki/**` → `ROLE_WIKI`, `/bff/wiki/admin/**` → `ROLE_ADMIN` and
+`/bff/wiki/superadmin/**` → `ROLE_SUPERADMIN`.
 
 The three capabilities and the role expressions that grant them:
 
@@ -83,7 +91,7 @@ In practice:
   operate the access console (grant, timeout, ban).
 - A **SUPERADMIN** additionally has the manage/history/audit view.
 - A user who holds none of these wiki capabilities is redirected to the
-  in-remote `/forbidden` screen.
+  in-remote `/wiki/forbidden` screen.
 
 ```mermaid
 flowchart TB
@@ -121,14 +129,18 @@ BFF picks that brand differs by role, and the console follows it exactly:
   **multi-brand (multi-issuer)** deployment the BFF therefore **requires** a
   known `targetDomain` and **fails closed with a 400** without one — a stamp of
   `default` would otherwise land the row somewhere the guard can never match
-  it, producing a grant/ban that silently has no effect. The console shows a
+  it, producing a grant/ban that silently has no effect. With **exactly one**
+  configured issuer pair the BFF stamps that brand, and a `targetDomain`
+  naming any other brand is a 400. With no `app.tenancy.issuers` configured,
+  every principal is `default` and the field is ignored
+  (`WikiAccessService#writeDomain`). The console shows a
   **Target brand** control to a SUPERADMIN for this reason: without it,
   grant/timeout/ban is unusable for them on a multi-brand cluster. Which control —
   and whether one is shown at all — is decided by what the BFF's brand catalogue
   says; see below.
 
 The field is sent only when filled. Left blank, the request body is unchanged
-from before — correct on a single-issuer cluster, where every principal is
+from before — correct where no issuers are configured, where every principal is
 `default` and the BFF ignores the field. The brand is validated by the BFF
 against its trusted `DomainRegistry`; an unknown value returns a 400 whose
 message is surfaced verbatim (it names the field to fix). The applied result
@@ -152,8 +164,8 @@ What the catalogue says decides which of five shapes the control takes
 | still loading | a **disabled** `<select>`, with the same label the picker gets, plus an announced "Loading the brands this server accepts…" | **operator decision 33b** — so the shape of the form stops moving under the operator. Disabled rather than typeable, so the original hazard (a free-text box that turns into a closed select underneath a half-typed value) is still avoided. **Bounded** — see below |
 | `targetDomainHonoured: true`, `brands` non-empty | a closed `<select>` over `brands` | the list is the server's own and complete |
 | `targetDomainHonoured: true`, `brands` empty | the same `<select>`, holding only its placeholder, plus a line saying no change can be applied here | reachable (two issuers both mapped to `default` are two entries but zero offerable brands). The server would reject every brand there, so submit stays blocked — but an empty control that silently never submits would be worse than saying so |
-| `targetDomainHonoured: false`, `brands` empty | none, one line of explanation | single-issuer deployment: every principal is `default`, so a SUPERADMIN write stamped `default` is *correct* and there is nothing to choose |
-| `targetDomainHonoured: false`, `brands` non-empty | none, a **warning** naming the brand | the hazard below |
+| `targetDomainHonoured: false`, `brands` empty | none, one line of explanation | no issuers configured: every principal is `default`, so a SUPERADMIN write stamped `default` is *correct* and there is nothing to choose |
+| `targetDomainHonoured: false`, `brands` non-empty | none, a **warning** naming the brand | the old hazard below. **Unreachable against `hugmesh-wiki-bff-api` main today**; the mode stays in the UI code (`BrandMode` `inert-mismatch`) as a guard |
 | the read failed **or did not answer in time** | the previous combobox over observed brands | losing the control entirely would leave a SUPERADMIN unable to act |
 
 **"Loading" renders a DISABLED control — operator decision 33b, 2026-09-17**
@@ -171,8 +183,8 @@ Four costs this carries, recorded rather than assumed, each pinned by a spec:
    than merely drawn.
 2. It stabilises the shape only on the path that ends in `picker`. On the degrade path below
    the control still changes **type**, from a `<select>` to a typeable `<input list>`.
-3. On a single-issuer deployment the read resolves to one of the two inert shapes, which
-   render no control — so there the disabled select **disappears** instead of filling in.
+3. Where no issuers are configured the read resolves to the inert shape, which
+   renders no control — so there the disabled select **disappears** instead of filling in.
 4. **It only gets two thirds of the way.** The answer was chosen so the form's shape stops
    moving; it stops the *control* moving, not the field. Measured in the real component with
    the real stylesheet at 640px: the `<select>` is 37.00px before and after, but the
@@ -212,22 +224,23 @@ were put to the operator: **(33a) required, blocking submit inline** — ratifie
 control (above); **(33c) the 8-second degrade deadline** — ratified as built. 33a and 33c
 are pinned by specs that name the decision, so they cannot drift off the answer silently.
 
-**The warning case is a real defect on the server, not a UI nicety.** The BFF reads
-`targetDomain` only when `DomainRegistry.isMultiIssuer()`, which is *two or more*
+**The warning case was a real defect on the server, and the server has fixed it.** The BFF
+used to read `targetDomain` only when `DomainRegistry.isMultiIssuer()`, which is *two or more*
 configured issuer pairs. With **exactly one** (`app.tenancy.issuers=https://id=hugmesh`)
-its users resolve `hugmesh` while a SUPERADMIN's grant or ban is stamped `default`, so
-`WikiAccessGuard` — which reads back `activeFor(subject, "hugmesh")` — never matches it:
-the ban silently does nothing. That is filed as **hugmesh-wiki-bff-api#21**, and the
+its users resolved `hugmesh` while a SUPERADMIN's grant or ban was stamped `default`, so
+`WikiAccessGuard` — which reads back `activeFor(subject, "hugmesh")` — never matched it:
+the ban silently did nothing. That was **hugmesh-wiki-bff-api#21**, and the
 operator **answered it on 2026-09-16** — *"Fix: stamp the configured brand. Exactly one
 configured issuer pair counts as a real brand; SUPERADMIN writes stamp it; a mismatched
-targetDomain becomes a 400 instead of a silent no-op."* That fix is a separate lane on the
-BFF, and **it retires this mode**: once it lands, `targetDomainHonoured` is true at exactly
-one pair, the warning stops being reachable, and its wording would be false if it ever
-rendered. `WikiBrandCatalog`'s javadoc and #21 carry the list of five artefacts that must
-move in that same commit; this console's `BrandMode`s are item 5. Until then, the console
-refuses to render a control there and says why, and
-`WikiAccessComponent#submit` does not send `targetDomain` in either inert mode — a body
-carrying a brand the server discards would make an audit log read as a targeted write.
+targetDomain becomes a 400 instead of a silent no-op."* The issue is closed. On BFF main,
+`WikiBrandCatalog` reports `targetDomainHonoured` as `isMultiIssuer() ||
+soleConfiguredBrand() != null`, so at exactly one pair the catalogue is honoured and the
+console draws the live picker with no code change. The `inert-mismatch` mode and its warning
+are therefore unreachable against current BFF main; the code is still in
+`WikiAccessComponent`. Against an older BFF the console still refuses to render a control
+there and says why. `WikiAccessComponent#submit` does not send `targetDomain` in either inert
+mode — a body carrying a brand the server discards would make an audit log read as a targeted
+write.
 
 **The fallback keeps the old behaviour, unchanged.** If the catalogue read is denied or
 fails, the field degrades to what it was before that endpoint existed: a datalist combobox
@@ -238,7 +251,8 @@ union is a **subset** of the registry — a brand with neither an override nor a
 invisible to it — so the input stays typeable there and the BFF's 400 remains the authority.
 The union is also **filtered**: rows can legitimately carry the BFF's `default` back-compat
 sentinel (its `WikiAuditLogRepository#record` stamps a SUPERADMIN's own null scope as
-`default`, so every page a SUPERADMIN edits — or deletes from the list — writes one) or the
+`default`, so every page a SUPERADMIN creates writes one; update, publish and delete stamp the
+brand the page lives in) or the
 fail-closed `__deny__` scope, and `DomainRegistry#isKnownDomain` rejects both outright, so a
 write targeting either always 400s. Suggesting them would hand the operator a
 guaranteed-rejected pick from a list whose whole purpose is the opposite, so
@@ -259,7 +273,7 @@ insert after validating that brand against its registry — so the returned bran
 known-good, and `WikiAccessComponent#learnBrand` folds it into the datalist for the rest of
 **this visit to the console** — the learning lives on the component instance and is
 deliberately not persisted, so navigating away and back re-derives the list. It learns what
-the server **stamped**, never what was typed: on a single-issuer cluster the BFF ignores the
+the server **stamped**, never what was typed: where no issuers are configured the BFF ignores the
 field and stamps `default`, and that must not become a suggestion, so the same
 `suggestableBrand` filter is applied here too. A write that FAILS teaches nothing — a 400 is
 precisely the server saying that brand does not exist. The observation read **folds** into
@@ -284,12 +298,13 @@ ng-openapi-gen clients (see **Typed API client** below). Auth rides the
   `expectedVersion` for optimistic-lock; 409 on stale edit)
 - `POST /bff/wiki/admin/pages/{slug}/publish` → publish
 - `DELETE /bff/wiki/admin/pages/{slug}` → delete page (204; cascades to the
-  page's attachments and is audited server-side; WIKI_WRITE). The `204` is
-  **unconditional** — the BFF returns it even when the DELETE matched no page
-  row — so **both** delete surfaces confirm the removal with a re-read rather
-  than trusting the status: the content list re-reads `GET /bff/wiki/pages`, the
-  page view re-reads `GET /bff/wiki/pages/{slug}` (tracked upstream as
-  hugmesh-wiki-bff-api issue #15).
+  page's attachments and is audited server-side; WIKI_WRITE). On BFF main the
+  `204` means exactly one page row was removed: the BFF deletes the row it resolved,
+  by id, and answers 404 when none was removed (hugmesh-wiki-bff-api issue #15,
+  closed; `WikiService#delete`). Older BFF builds answered `204` even when the DELETE matched
+  no row, so **both** delete surfaces still confirm the removal with a re-read
+  rather than trusting the status: the content list re-reads `GET /bff/wiki/pages`, the
+  page view re-reads `GET /bff/wiki/pages/{slug}`.
 - `GET  /bff/wiki/pages/{slug}/attachments` → `AttachmentList` (list, read tier)
 - `GET  /bff/wiki/pages/{slug}/attachments/{filename}` → download the raw bytes (read tier)
 - `POST /bff/wiki/admin/pages/{slug}/attachments` → upload (multipart `file` part; WIKI_WRITE)
@@ -316,7 +331,7 @@ read from **browser `localStorage`** under the key **`hug.session`**
 (`src/app/session.service.ts`). The host shell and each federated remote hold
 their own `SessionService` instance over the same key, kept in sync two ways:
 
-- a **same-document** custom `window` event (`snap-session-change`,
+- a **same-document** custom `window` event (`hug-session-change`,
   dispatched by whichever instance wrote) so host + remotes re-read in one tab;
 - the cross-tab `storage` event on the `hug.session` key.
 
@@ -348,8 +363,9 @@ dependency). Both helpers live in `src/app/markdown.ts`:
 The production image serves the built SPA + emitted `remoteEntry.json` from
 `nginxinc/nginx-unprivileged` on **port 8080** (`Dockerfile` + `nginx.conf`).
 `nginx.conf` emits a baseline set of **defence-in-depth HTTP security headers**
-on every response (with `always`, so they also cover errors and the `/healthz`
-endpoint):
+(with `always`, so they also cover errors and the `/healthz` endpoint). The two
+theme-stylesheet locations (`/hug-theme.css`, `/snap-theme.css`) re-declare the first
+three and leave out `Strict-Transport-Security`:
 
 - `X-Content-Type-Options: nosniff` — stop MIME-type sniffing;
 - `X-Frame-Options: DENY` — clickjacking protection (the SPA is never framed;
@@ -479,7 +495,7 @@ and are not knobs.
 ## Typed API client (ng-openapi-gen)
 
 `ng-openapi-gen.json` and the generated client under **`src/app/api/`** are
-**committed** to the repository — 9 models + 3 services (`WikiService`
+**committed** to the repository — 12 models + 3 services (`WikiService`
 content, `WikiAccessService`, `WikiAttachmentsService`). The input spec
 (`openapi.json`) is the wiki-bff's own committed
 `src/main/resources/openapi/openapi.json`, copied in by `gen:spec`, so the
@@ -497,7 +513,7 @@ and the per-page attachments panel (`listAttachments`/`uploadAttachment`/
 `deleteAttachment`/`downloadAttachment`) all ride the generated, typed clients
 over Angular `HttpClient`, with the HttpOnly `bff_` cookie attached by
 `auth.interceptor.ts` (`withCredentials`, no bearer — see **Session** above).
-The public method signatures and the `WikiApiError` (409/403/404) contract
+The public method signatures and the `WikiApiError` (400/403/404/409) contract
 stay stable across regenerations.
 
 `auditTrail()` is typed the whole way down: the wiki-bff declares a real
@@ -528,7 +544,9 @@ Two fields worth knowing about on the wiki-bff spec:
   cross-brand target** above).
 
 Re-running `npm run gen:spec` against the wiki-bff's committed `openapi.json`
-regenerates `src/app/api/` deterministically. That command is the only
+regenerates `src/app/api/` deterministically. `npm run verify:spec`
+(`scripts/assert-spec-sync.mjs`) compares the committed `openapi.json` with the
+BFF's and fails on drift; it never writes the file. That command is the only
 supported way to update `src/app/api/` — never hand-edit it; every generated
 file carries a `DO NOT EDIT` banner. The wrapper types in `wiki.service.ts`
 are hand-written and are **not** regenerated, so a new bff field needs a
@@ -561,7 +579,9 @@ time.
 
 The pipeline has four stages (`stages: [test, e2e, build, pentest]`):
 
-1. **`test`** — runs `npm test` (`ng test` in headless Chromium) and **gates
+1. **`test`** — holds two jobs. `verify:spec` (`needs: []`) clones the BFF repo's
+   `main`, runs `scripts/assert-spec-sync.mjs` and fails when the committed
+   `openapi.json` no longer matches the BFF's. The `test` job runs `npm test` (`ng test` in headless Chromium) and **gates
    the build** (`build:image` declares `needs: [test]`). It emits a JUnit
    report at `test-results/results.xml` (via the `karma-junit-reporter` wired
    in `karma.conf.js`) plus `coverage/` artifacts, surfaced in the GitLab merge
@@ -627,7 +647,7 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
 (design only).
 
 - **Shipped — Typed API client (ng-openapi-gen):** the generated client
-  under `src/app/api/` is committed (9 models + 3 services), regenerated by
+  under `src/app/api/` is committed (12 models + 3 services), regenerated by
   `gen:spec` from the wiki-bff's committed `openapi.json` (no running BFF
   required). `wiki.service.ts` fully delegates to it — content, the
   access/audit overlay, and the per-page attachments panel are all on the
@@ -651,35 +671,32 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   unique only *within* a brand (`UNIQUE(domain, slug)`) and a SUPERADMIN's list
   is cross-brand, so two rows may share a slug and a slug key would arm — and
   drop — all of them at once. The outcome is decided by a confirming **re-read**
-  rather than by the status code, because the endpoint answers `204` even when
-  its DELETE matched no row; if the page is still listed afterwards the operator
-  is told so instead of being shown a success. **The page view applies the same
-  rule**, and can decide it by *identity* rather than by the slug: it re-reads
-  `GET /bff/wiki/pages/{slug}`, which resolves through the *same* server-side
-  lookup the delete itself used, and compares the row **`id`** — so a `404` is a
-  confirmed removal; the same id
-  coming back is a page the DELETE left behind (announced as a warning naming
-  the brand it still lives in, with the page left rendered); a *different* id is
-  another brand's page that legally shares the slug, and therefore still a
-  completed delete; and a re-read that fails at all is reported as
-  **unconfirmed** rather than as either outcome — announced, but styled as a
-  warning and never opening with "Deleted", and a `403` (a permission boundary)
-  is worded differently from a transient failure worth retrying. The content
-  list applies the identical rule to its own unconfirmed ack. Identity only
-  decides when **both** rows actually carry an `id`: every generated model
-  property is optional, so an absent id is a re-read that proves nothing and is
-  reported as undecidable rather than compared (`undefined === undefined` would
-  otherwise announce a completed delete as a survivor). Because the BFF runs the
-  attachment cascade *before* the page delete, a page that survives has already
-  lost its attachments, so that path also re-reads the embedded attachments
-  panel instead of leaving destroyed files listed. Identity is the strongest
-  signal this endpoint offers, but it is not unconditional: the SUPERADMIN
-  resolution is `findFirstBySlugOrderByIdAsc` over DB-generated UUIDs, so id
-  order is arbitrary, and a same-slug page created in another brand with a lower
-  id *between* the load and the confirm would answer the re-read and read as a
-  completed delete. The window is narrow, the console cannot close it (the BFF
-  exposes no get-page-by-id), and the fix is upstream — see
-  `hugmesh-wiki-bff-api` issue #15 below. (See **BFF endpoints consumed** above.)
+  rather than by the status code. (The re-read was added because older BFF builds
+  answered `204` even when their DELETE matched no row; on BFF main a `204` means
+  one row was removed, `hugmesh-wiki-bff-api` issue #15, closed.) If the page is
+  still listed afterwards the operator is told so instead of being shown a success.
+  **The page view applies the same rule**, and can decide it by *identity* rather
+  than by the slug: it re-reads `GET /bff/wiki/pages/{slug}`, which resolves through
+  the *same* server-side lookup the delete itself used, and compares the row
+  **`id`** — so a `404` is a confirmed removal; the same id coming back is a page
+  the DELETE left behind (announced as a warning naming the brand it still lives
+  in, with the page left rendered); a *different* id is another brand's page that
+  legally shares the slug, and therefore still a completed delete; and a re-read
+  that fails at all is reported as **unconfirmed** rather than as either outcome —
+  announced, but styled as a warning and never opening with "Deleted", and a `403`
+  (a permission boundary) is worded differently from a transient failure worth
+  retrying. The content list applies the identical rule to its own unconfirmed ack.
+  Identity only decides when **both** rows actually carry an `id`: every generated
+  model property is optional, so an absent id is a re-read that proves nothing and
+  is reported as undecidable rather than compared (`undefined === undefined` would
+  otherwise announce a completed delete as a survivor). The survivor path also
+  re-reads the embedded attachments panel instead of leaving files listed that an
+  older BFF had already deleted. Identity is not unconditional: the SUPERADMIN
+  resolution is `findFirstBySlugOrderByIdAsc` over DB-generated UUIDs, so id order
+  is arbitrary, and a same-slug page created in another brand with a lower id
+  *between* the load and the confirm would answer the re-read and read as a
+  completed delete. The window is narrow, and the console cannot close it: the BFF
+  exposes no get-page-by-id. (See **BFF endpoints consumed** above.)
 - **Shipped — Opaque `bff_` session (no bearer in `localStorage`):**
   `bffToken` and the per-service access tokens are not part of `SnapSession`;
   `/bff/*` calls ride the HttpOnly `bff_` cookie and the gateway exchanges it
@@ -689,10 +706,14 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
 - **Planned — Casdoor MFA / step-up:** platform-wide MFA enforcement
   (WebAuthn + TOTP + recovery codes, gateway `mfa_required` fail-closed +
   `amr`/`acr` → `MFA_SATISFIED`, with step-up for sensitive operations) is
-  designed at the platform level but does not touch this remote yet. If MFA
-  gating reaches the `/wiki` route or its write/manage actions, the
-  session/guard model here will need a follow-up. No MFA awareness exists in
-  this repo today.
+  designed at the platform level. The wiki BFF already gates `/bff/wiki/admin/**` and
+  `/bff/wiki/superadmin/**` with `stepUp(...)` (`SecurityConfig`), which adds
+  `MFA_SATISFIED` to the role check only while `app.mfa.enabled=true`; the flag
+  is off by default. This remote has no MFA code in `src/`: it cannot tell a
+  step-up refusal from a plain role 403, because the BFF emits no
+  `X-Step-Up-Required` signal yet (`hugmesh-wiki-bff-api#35`, open). The remote's
+  own tracking issue is `hugmesh-wiki-ui#4` (open). The e2e suite pins the gap in
+  `features/security/step-up-signal.feature`.
 
 ## Known gaps / TODO
 
@@ -715,25 +736,21 @@ State key: shipped (on `main`) · in-flight (open branch/PR) · planned
   audit page is not suggested), which is why the fallback stays typeable and
   the bff's 400 on an unknown brand remains the real gate there. The observed
   set is additionally filtered of the never-targetable `default` and `__deny__`
-  sentinels, so a single-issuer-migrated cluster shows no suggestions rather
-  than one that always 400s.
-- **A SUPERADMIN change is still stamped `default` at exactly one configured
-  issuer pair**, so it never matches the users it names: a server-side defect
-  this console can only DETECT and warn about (the `inert-mismatch` mode).
-  Tracked as **hugmesh-wiki-bff-api#21**, which the operator answered on
-  2026-09-16 (*"Fix: stamp the configured brand"*); the fix is a separate BFF
-  lane and retires that mode — see **Access console: the cross-brand target**.
-- **A page delete cannot be confirmed from the status code**: the bff's
-  `DELETE /bff/wiki/admin/pages/{slug}` answers `204` even when it removed no
-  page row — its SUPERADMIN path resolves the page cross-brand but scopes the
-  DELETE to `default` (`WikiService#delete` → `WikiPageRepository
-  #deleteBySlugAndDomain`), and the deleted-row count is discarded. This console
-  works around it in BOTH delete surfaces — the list re-reads the page list, the
-  page view re-reads the page itself and decides on the row id — and warns when
-  the page is still there, but the workaround **cannot recover the page's
-  attachments**, which that path deletes unscoped first; it can only stop them
-  being listed as though they survived. The real fix is server-side, on
-  hugmesh-wiki-bff-api (issue #15).
+  sentinels, so a cluster whose only observed brand is `default` shows no
+  suggestions rather than one that always 400s.
+- ~~**A SUPERADMIN change is still stamped `default` at exactly one configured
+  issuer pair**~~ — **CLOSED on the BFF.** hugmesh-wiki-bff-api#21 is closed:
+  at one pair the BFF stamps the configured brand and a mismatched `targetDomain`
+  is a 400. The console's `inert-mismatch` mode is now unreachable against BFF
+  main and stays in the code as a guard. See **Access console: the cross-brand
+  target**.
+- ~~**A page delete cannot be confirmed from the status code**~~ — **CLOSED on the
+  BFF.** hugmesh-wiki-bff-api#15 is closed: the delete removes the resolved row by
+  id and answers 404 when it removed nothing. The console keeps its confirming
+  re-read in both delete surfaces. One limit remains: the page view's re-read
+  resolves a SUPERADMIN's slug with `findFirstBySlugOrderByIdAsc`, and the BFF has
+  no get-page-by-id, so the console cannot tell two same-slug pages apart in the
+  narrow window described under **Roadmap**.
 - **No cursor paging on the audit trail**: the manage view's "Rows to load"
   picker covers the bff's whole `[1, 1000]` `?limit` range, but the endpoint
   offers no cursor/offset, so 1000 newest-first rows is the deepest this

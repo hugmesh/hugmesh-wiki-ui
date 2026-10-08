@@ -26,6 +26,7 @@ within-wiki privilege boundary.
 | MULTIUSER | `features/wiki/wiki-authoring.feature` | an admin authoring + running the grant/timeout/ban console for their own brand, while a same-domain granted MOD sees read-only |
 | CROSS-USER | `features/multitenant/cross-domain-isolation.feature` | domain-B admin DENIED on domain-A's wiki access (403/404); admin DENIED on superadmin manage/audit; parallel ALLOW/DENY with both users live |
 | SECURITY | `features/security/bff-auth-gates.feature` | the wiki-bff rejection paths (401 anon, 403 under-privileged) behind the display-only console |
+| SECURITY | `features/security/step-up-signal.feature` | a refusal by role (domain admin, plain user) carries no step-up signal; with the platform MFA gate armed (`MFA_STEPUP_ARMED=1`) a superadmin without a fresh MFA stamp gets a 403 on the audit trail. The `@fixme` scenario, which expects a step-up signal header on that 403, stays red until `hugmesh-wiki-bff-api#35` lands |
 | A11Y | `features/a11y/accessibility.feature` | skip-link → focus `#wiki-main`, named menubar landmark + per-item names/help, roving tabindex (one tab stop + Arrow/Home), labelled editor fields, named manage regions, focus restore |
 
 ### Multi-user write-path coverage (two live identities per scenario)
@@ -40,7 +41,7 @@ real write pipeline end to end with a writer + an independent second user:
 | MULTIUSER | `features/multitenant/ban-consequence.feature` | victim-creates-first: a MOD reader proves read, then an admin's ban cuts the next read off (`no longer have permission`); a short timeout auto-restores via a bounded poll (never a sleep) |
 | MULTIUSER | `features/multitenant/grant-revoke-lifecycle.feature` | a denied reader's read flips to ALLOW on grant, back to DENY on **Remove grant** (`wiki-access-remove`); a ban is lifted by **Restore** (`wiki-access-restore` → `Ban lifted`) so the surviving grant reads again |
 | CROSS-USER | `features/multitenant/cross-domain-content-isolation.feature` | a domain-A admin really authors a page (POST); a domain-B admin can neither list nor read it (403/404) — real content isolation, not a `?domain=` probe |
-| MULTIUSER | `features/multitenant/cross-brand-target-domain.feature` | a superadmin `targetDomain` grant lands in the named brand (`wiki-access-result-domain` + the victim's read starts succeeding); an unknown brand is rejected with the server's **verbatim** fail-closed 400 |
+| MULTIUSER | `features/multitenant/cross-brand-target-domain.feature` | a superadmin `targetDomain` grant lands in the named brand (`wiki-access-result-domain` + the victim's read starts succeeding); the Target brand picker offers the server's own brands and cannot name an unknown one (the older "verbatim fail-closed 400" scenario was replaced when the picker landed) |
 | MULTIUSER | `features/wiki/attachments-cross-role.feature` | an admin uploads (multipart); a same-domain MOD reader lists + downloads it (real download event, right filename) while their upload/delete controls are `aria-disabled` with the role helptext; the admin's delete empties the panel on reload |
 | USER-SITUATIONAL | `features/wiki/role-change-mid-session.feature` | an open admin tab downgraded to granted-MOD (the `hug-session-change` re-sync) drops the New/Access nav + `wiki-new-page` affordance and bounces the next guarded nav — no reload |
 
@@ -60,7 +61,7 @@ needs **no cluster** and the GitLab `e2e:bdd` job is `allow_failure: true`.
 `@cluster` is used deliberately instead of playwright-bdd's reserved `@skip`:
 `@skip` drops a scenario from generation entirely (`bddgen` emits 0 specs for
 it), so a `@skip`-tagged suite cannot be *discovered*. `@cluster` is a plain
-filter tag — the no-filter validation below generates and lists all 46
+filter tag — the no-filter validation below generates and lists all 50
 scenarios, proving the Gherkin compiles, while the default config keeps them
 dark.
 
@@ -82,7 +83,7 @@ export default defineConfig({ reporter: [['list']],
   projects: [{ name: 'bdd', testDir: d, use: { ...devices['Desktop Chrome'] } }] });
 EOF
 npx bddgen -c pw-validate.config.ts
-npx playwright test --list -c pw-validate.config.ts   # → 46 tests in 13 files
+npx playwright test --list -c pw-validate.config.ts   # → 50 tests in 14 files
 rm pw-validate.config.ts
 ```
 
@@ -92,7 +93,7 @@ Drop the `@cluster` tag from a feature (or run with an override config that
 omits the `not @cluster` filter), export `E2E_BASE_URL` + the per-role
 `E2E_*_PASSWORD` vars, then `npm run bdd`.
 
-Per-user `E2E_<ROLE>_PASSWORD` / shared `E2E_PASSWORD` env vars above are
+The per-user `E2E_<ROLE>_PASSWORD` and shared `E2E_PASSWORD` env vars are
 optional overrides, not requirements: `tests/helpers/roles.ts` (`passwordFor()`)
 falls back to the run-state `.e2e-credentials` file written by
 hugmesh-generator's `make stack-seed` (`$E2E_CREDENTIALS_FILE`, or a
