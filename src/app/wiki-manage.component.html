@@ -2,6 +2,10 @@
   <h2>Management</h2>
   <p class="wiki-muted">Superadmin-only: active access overrides, a principal's full history, and the content audit trail.</p>
 
+  @if (stepUpOpen()) {
+    <hug-wiki-step-up (satisfied)="onStepUpSatisfied()" (dismissed)="onStepUpDismissed()" />
+  }
+
   <!-- ── Active overrides ── -->
   <section class="wiki-manage__section" role="region" aria-labelledby="wiki-manage-active-title">
     <h3 id="wiki-manage-active-title">Active access overrides</h3>

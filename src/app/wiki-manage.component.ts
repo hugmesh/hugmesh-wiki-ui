@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
 import { WikiService, WikiAccess, WikiApiError, WikiAuditEntry } from './wiki.service';
+import { WikiStepUpComponent } from './wiki-step-up.component';
 
 /**
  * The MANAGE view — the superadmin-only surface over /bff/wiki/superadmin/**
@@ -20,7 +21,7 @@ import { WikiService, WikiAccess, WikiApiError, WikiAuditEntry } from './wiki.se
 @Component({
   selector: 'hug-wiki-manage',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, WikiStepUpComponent],
   templateUrl: './wiki-manage.component.html',
   styleUrl: './wiki-manage.component.scss',
 })
@@ -69,6 +70,14 @@ export class WikiManageComponent implements OnInit {
    *  test and block the page. */
   readonly auditLimitError = signal('');
 
+  /** True while a step-up refusal is waiting on the identity check
+   *  (hugmesh-wiki-ui#4). One offer serves every section that was refused. */
+  readonly stepUpOpen = signal(false);
+
+  /** The reads the bff refused for want of an MFA stamp, by section, so a satisfied
+   *  check re-runs exactly those and nothing else. */
+  private readonly stepUpRetries = new Map<string, () => Promise<void>>();
+
   /** The audit columns, in render order, now that the row shape is known. Keyed
    *  on {@link WikiAuditEntry} so a bff-side rename is a COMPILE error here. */
   readonly auditColumns: ReadonlyArray<{ key: keyof WikiAuditEntry; label: string }> = [
@@ -103,10 +112,12 @@ export class WikiManageComponent implements OnInit {
   async reloadActive(): Promise<void> {
     this.activeLoading.set(true);
     this.activeError.set('');
+    this.stepUpRetries.delete('active');
     try {
       const res = await this.wiki.listActiveAccess();
       this.active.set(res.access ?? []);
     } catch (e) {
+      this.noteStepUp(e, 'active', () => this.reloadActive());
       this.activeError.set(this.message(e, 'active overrides'));
     } finally {
       this.activeLoading.set(false);
@@ -123,10 +134,12 @@ export class WikiManageComponent implements OnInit {
     if (user.length === 0) return;
     this.historyLoading.set(true);
     this.historyError.set('');
+    this.stepUpRetries.delete('history');
     try {
       const res = await this.wiki.accessHistory(user);
       this.history.set(res.access ?? []);
     } catch (e) {
+      this.noteStepUp(e, 'history', () => this.loadHistory());
       this.history.set(null);
       this.historyError.set(this.message(e, 'history'));
     } finally {
@@ -143,12 +156,14 @@ export class WikiManageComponent implements OnInit {
   async reloadAudit(): Promise<void> {
     this.auditLoading.set(true);
     this.auditError.set('');
+    this.stepUpRetries.delete('audit');
     try {
       const res = await this.wiki.auditTrail(this.auditLimit());
       // `actions` is optional on the generated model (springdoc marks no field
       // required), so an absent key is still normalized to an empty trail.
       this.audit.set(res.actions ?? []);
     } catch (e) {
+      this.noteStepUp(e, 'audit', () => this.reloadAudit());
       this.auditError.set(this.message(e, 'audit trail'));
     } finally {
       this.auditLoading.set(false);
@@ -208,6 +223,32 @@ export class WikiManageComponent implements OnInit {
   }
 
   /**
+   * The identity check passed: the session now carries a fresh MFA stamp, so
+   * re-run exactly the reads the bff refused, unchanged.
+   */
+  onStepUpSatisfied(): void {
+    const retries = [...this.stepUpRetries.values()];
+    this.stepUpRetries.clear();
+    this.stepUpOpen.set(false);
+    for (const retry of retries) void retry();
+  }
+
+  /** The user chose "Not now": drop the offer and retry nothing. Each refused
+   *  section keeps its message and its Retry, which re-offers the check. */
+  onStepUpDismissed(): void {
+    this.stepUpRetries.clear();
+    this.stepUpOpen.set(false);
+  }
+
+  /** Remember a read the bff refused for want of an MFA stamp and open the offer.
+   *  Any other failure, a role 403 included, is none of this method's business. */
+  private noteStepUp(e: unknown, section: string, retry: () => Promise<void>): void {
+    if (!(e instanceof WikiApiError) || !e.isStepUpRequired) return;
+    this.stepUpRetries.set(section, retry);
+    this.stepUpOpen.set(true);
+  }
+
+  /**
    * Map a caught error to a section-specific user-friendly message.
    * A 403 always means the BFF denied access (superadmin required for all
    * /bff/wiki/superadmin/** paths).
@@ -217,6 +258,9 @@ export class WikiManageComponent implements OnInit {
    * @returns A localized error string for the template.
    */
   private message(e: unknown, what: string): string {
+    if (e instanceof WikiApiError && e.isStepUpRequired) {
+      return `The ${what} needs a fresh identity check.`;
+    }
     if (e instanceof WikiApiError && e.isForbidden) {
       return `The server denied access to the ${what} — superadmin is required.`;
     }
