@@ -1,0 +1,16 @@
+<section class="wiki-step-up" role="group" aria-label="Identity check required" data-testid="wiki-step-up">
+  <ng-container #dialogHost></ng-container>
+  @if (state() === 'loading') {
+    <p class="wiki-muted" role="status" data-testid="wiki-step-up-loading">Loading the identity check…</p>
+  } @else if (state() === 'link') {
+    <p data-testid="wiki-step-up-fallback-text">
+      This needs a fresh identity check, and it cannot be shown here.
+    </p>
+    <p>
+      <a class="wiki-btn" [href]="href()" data-testid="wiki-step-up-link">Verify and return</a>
+      <button type="button" class="wiki-btn wiki-btn--secondary" (click)="dismissed.emit()" data-testid="wiki-step-up-not-now">
+        Not now
+      </button>
+    </p>
+  }
+</section>

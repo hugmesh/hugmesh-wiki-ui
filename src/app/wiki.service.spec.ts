@@ -174,6 +174,31 @@ describe('WikiService — content (delegates to the generated client over HttpCl
       expect((e as WikiApiError).isForbidden).toBeTrue();
     }
   });
+
+  // ── hugmesh-wiki-ui#4: the step-up refusal survives the error mapping ──
+
+  it('carries the BFF step-up signal onto the WikiApiError (header only, no phrase in the body)', async () => {
+    const promise = service.auditTrail(50);
+    httpMock
+      .expectOne((r) => r.url === '/bff/wiki/superadmin/audit')
+      .flush({}, { status: 403, statusText: 'Forbidden', headers: { 'X-Step-Up-Required': 'X-Wiki-StepUp' } });
+    const e = (await promise.then(() => null, (err: unknown) => err)) as WikiApiError;
+    expect(e instanceof WikiApiError).toBeTrue();
+    expect(e.isForbidden).toBeTrue();
+    expect(e.isStepUpRequired).toBeTrue();
+    expect(e.stepUp).toEqual({ signal: 'X-Wiki-StepUp', via: 'signal' });
+  });
+
+  it('leaves a refusal by role marked as an ordinary 403', async () => {
+    const promise = service.auditTrail(50);
+    httpMock
+      .expectOne((r) => r.url === '/bff/wiki/superadmin/audit')
+      .flush({ error: 'forbidden' }, { status: 403, statusText: 'Forbidden' });
+    const e = (await promise.then(() => null, (err: unknown) => err)) as WikiApiError;
+    expect(e.isForbidden).toBeTrue();
+    expect(e.isStepUpRequired).toBeFalse();
+    expect(e.stepUp).toBeNull();
+  });
 });
 
 /**

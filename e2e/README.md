@@ -26,7 +26,7 @@ boundary inside the wiki.
 | MULTIUSER | `features/wiki/wiki-authoring.feature` | an admin authoring + running the grant/timeout/ban console for their own brand, while a same-domain granted MOD sees read-only |
 | CROSS-USER | `features/multitenant/cross-domain-isolation.feature` | domain-B admin DENIED on domain-A's wiki access (403/404); admin DENIED on superadmin manage/audit; parallel ALLOW/DENY with both users live |
 | SECURITY | `features/security/bff-auth-gates.feature` | the wiki-bff rejection paths (401 anon, 403 under-privileged) behind the display-only console |
-| SECURITY | `features/security/step-up-signal.feature` | a refusal by role (domain admin, plain user) carries no step-up signal; with the platform MFA gate armed (`MFA_STEPUP_ARMED=1`) a superadmin without a fresh MFA stamp gets a 403 on the audit trail. The `@fixme` scenario, which expects a step-up signal header on that 403, stays red until `hugmesh-wiki-bff-api#35` lands |
+| SECURITY | `features/security/step-up-signal.feature` | a refusal by role (domain admin, plain user) carries no step-up signal; with the platform MFA gate armed (`MFA_STEPUP_ARMED=1`) a superadmin without a fresh MFA stamp gets a 403 on the audit trail. The second armed scenario expects the step-up signal header on that 403, which `hugmesh-wiki-bff-api#35` emits; it needs an armed stack and has not been run yet |
 | A11Y | `features/a11y/accessibility.feature` | skip-link → focus `#wiki-main`, named menubar landmark + per-item names/help, roving tabindex (one tab stop + Arrow/Home), labelled editor fields, named manage regions, focus restore |
 
 ### Multi-user write-path coverage (two live identities per scenario)

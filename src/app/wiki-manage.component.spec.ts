@@ -2,6 +2,8 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 
 import { WikiManageComponent } from './wiki-manage.component';
 import { WikiService, WikiAccess, WikiApiError, WikiAuditEntry } from './wiki.service';
+import { LOGIN_STEP_UP_LOADER, LoginMfaStepUpComponent } from './mfa-step-up';
+import { Component, Type, output } from '@angular/core';
 
 function access(over: Partial<WikiAccess> = {}): WikiAccess {
   return {
@@ -221,5 +223,140 @@ describe('WikiManageComponent (superadmin manage view)', () => {
     const table = el().querySelector('[data-testid="wiki-manage-active"]')!;
     expect(table.querySelector('caption')).not.toBeNull();
     expect(table.querySelectorAll('th[scope="col"]').length).toBeGreaterThan(0);
+  });
+});
+
+/** A stand-in for login-ui's step-up dialog (the federated MfaChallengeComponent). */
+@Component({ selector: 'fake-login-mfa', standalone: true, template: '<p data-testid="fake-dialog">dialog</p>' })
+class FakeLoginMfaComponent {
+  static readonly instances: FakeLoginMfaComponent[] = [];
+  constructor() {
+    FakeLoginMfaComponent.instances.push(this);
+  }
+  readonly satisfied = output<void>();
+  readonly dismissed = output<void>();
+  readonly unavailable = output<void>();
+}
+
+/** What wiki-bff-api's step-up refusal looks like once mapped by the service. */
+function stepUpRefusal(): WikiApiError {
+  return new WikiApiError(403, 'wiki management requires step-up re-authentication (present X-Wiki-StepUp)', {
+    signal: 'X-Wiki-StepUp',
+    via: 'signal',
+  });
+}
+
+describe('WikiManageComponent: step-up (hugmesh-wiki-ui#4)', () => {
+  let fixture: ComponentFixture<WikiManageComponent>;
+  let wiki: jasmine.SpyObj<WikiService>;
+  let loads: number;
+
+  beforeEach(async () => {
+    loads = 0;
+    FakeLoginMfaComponent.instances.length = 0;
+    wiki = jasmine.createSpyObj<WikiService>('WikiService', ['listActiveAccess', 'accessHistory', 'auditTrail']);
+    wiki.listActiveAccess.and.resolveTo({ access: [access()] });
+    wiki.auditTrail.and.resolveTo({ actions: [auditRow()] });
+    await TestBed.configureTestingModule({
+      imports: [WikiManageComponent],
+      providers: [
+        { provide: WikiService, useValue: wiki },
+        {
+          provide: LOGIN_STEP_UP_LOADER,
+          useValue: async () => {
+            loads++;
+            return {
+              loadMfaStepUpComponent: async () => FakeLoginMfaComponent as Type<LoginMfaStepUpComponent>,
+            };
+          },
+        },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(WikiManageComponent);
+  });
+
+  const el = () => fixture.nativeElement as HTMLElement;
+  const testid = (id: string) => el().querySelector(`[data-testid="${id}"]`);
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 4; i++) {
+      fixture.detectChanges();
+      await fixture.whenStable();
+    }
+  }
+
+  it('a role 403 keeps the superadmin message and never loads the dialog', async () => {
+    wiki.auditTrail.and.rejectWith(new WikiApiError(403, 'forbidden'));
+    await settle();
+    expect(testid('wiki-manage-audit-error')!.textContent).toContain('superadmin is required');
+    expect(testid('wiki-step-up')).toBeNull();
+    expect(loads).toBe(0);
+  });
+
+  it('a step-up refusal offers the identity check instead of "superadmin is required"', async () => {
+    wiki.auditTrail.and.rejectWith(stepUpRefusal());
+    await settle();
+    const msg = testid('wiki-manage-audit-error')!.textContent!;
+    expect(msg).toContain('fresh identity check');
+    expect(msg).not.toContain('superadmin is required');
+    expect(testid('wiki-step-up')).not.toBeNull();
+    expect(loads).toBe(1);
+    expect(testid('fake-dialog')).not.toBeNull();
+  });
+
+  it('(satisfied) re-reads ONLY the refused section, then closes the offer', async () => {
+    wiki.auditTrail.and.returnValues(Promise.reject(stepUpRefusal()), Promise.resolve({ actions: [auditRow()] }));
+    await settle();
+    expect(wiki.listActiveAccess).toHaveBeenCalledTimes(1);
+    expect(wiki.auditTrail).toHaveBeenCalledTimes(1);
+
+    FakeLoginMfaComponent.instances[0].satisfied.emit();
+    await settle();
+
+    expect(wiki.auditTrail).toHaveBeenCalledTimes(2);
+    expect(wiki.listActiveAccess).toHaveBeenCalledTimes(1);
+    expect(testid('wiki-step-up')).toBeNull();
+    expect(testid('wiki-manage-audit-error')).toBeNull();
+    expect(testid('wiki-manage-audit')).not.toBeNull();
+  });
+
+  it('one offer serves every refused section and (satisfied) re-reads each of them', async () => {
+    wiki.listActiveAccess.and.returnValues(Promise.reject(stepUpRefusal()), Promise.resolve({ access: [access()] }));
+    wiki.auditTrail.and.returnValues(Promise.reject(stepUpRefusal()), Promise.resolve({ actions: [auditRow()] }));
+    await settle();
+    expect(el().querySelectorAll('[data-testid="wiki-step-up"]').length).toBe(1);
+
+    FakeLoginMfaComponent.instances[0].satisfied.emit();
+    await settle();
+
+    expect(wiki.listActiveAccess).toHaveBeenCalledTimes(2);
+    expect(wiki.auditTrail).toHaveBeenCalledTimes(2);
+  });
+
+  it('(dismissed) retries nothing and leaves the section error with its Retry', async () => {
+    wiki.auditTrail.and.rejectWith(stepUpRefusal());
+    await settle();
+
+    FakeLoginMfaComponent.instances[0].dismissed.emit();
+    await settle();
+
+    expect(wiki.auditTrail).toHaveBeenCalledTimes(1);
+    expect(testid('wiki-step-up')).toBeNull();
+    expect(testid('wiki-manage-audit-error')!.textContent).toContain('fresh identity check');
+  });
+
+  it('a history lookup refused for step-up is retried with the same user', async () => {
+    await settle();
+    wiki.accessHistory.and.returnValues(Promise.reject(stepUpRefusal()), Promise.resolve({ access: [access()] }));
+    fixture.componentInstance.historyUser.set('google:bob@x.com');
+    await fixture.componentInstance.loadHistory();
+    await settle();
+    expect(testid('wiki-step-up')).not.toBeNull();
+
+    FakeLoginMfaComponent.instances[0].satisfied.emit();
+    await settle();
+
+    expect(wiki.accessHistory).toHaveBeenCalledTimes(2);
+    expect(wiki.accessHistory.calls.argsFor(1)).toEqual(['google:bob@x.com']);
+    expect(testid('wiki-manage-history')).not.toBeNull();
   });
 });
