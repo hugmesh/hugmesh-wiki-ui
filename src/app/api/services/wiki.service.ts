@@ -76,7 +76,7 @@ export class WikiService extends BaseService {
   /**
    * Delete a wiki page by slug (cascades to its attachments; audited). ADMIN/SUPERADMIN.
    *
-   * Delete a wiki page by slug in the caller's brand. Cascades to its attachments. Audited. ADMIN/SUPERADMIN only.
+   * Delete a wiki page by slug, resolved in the caller's scope (the caller's brand; any brand for a SUPERADMIN) and deleted by that row's id, so no other brand's same-slug page can be touched. Cascades to its attachments. Audited in the brand the page lived in. ADMIN/SUPERADMIN only.
    *
    * This method provides access to the full `HttpResponse`, allowing access to response headers.
    * To access only the response body, use `wikiDeletePage()` instead.
@@ -91,7 +91,7 @@ export class WikiService extends BaseService {
   /**
    * Delete a wiki page by slug (cascades to its attachments; audited). ADMIN/SUPERADMIN.
    *
-   * Delete a wiki page by slug in the caller's brand. Cascades to its attachments. Audited. ADMIN/SUPERADMIN only.
+   * Delete a wiki page by slug, resolved in the caller's scope (the caller's brand; any brand for a SUPERADMIN) and deleted by that row's id, so no other brand's same-slug page can be touched. Cascades to its attachments. Audited in the brand the page lived in. ADMIN/SUPERADMIN only.
    *
    * This method provides access only to the response body.
    * To access the full response (for headers, for example), `wikiDeletePage$Response()` instead.

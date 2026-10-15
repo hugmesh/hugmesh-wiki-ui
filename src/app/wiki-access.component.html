@@ -81,8 +81,35 @@
       @switch (brandMode()) {
 
         @case ('loading') {
+          <!-- DECISION 33b (operator, 2026-09-17, hugmesh-generator#347): a DISABLED control,
+               not the nothing-at-all that shipped, so the SHAPE OF THE FORM stops moving under
+               the operator while the catalogue read is in flight. It is deliberately the same
+               label + <select> the `picker` case renders, so when the catalogue answers the
+               control is filled in place rather than appearing and pushing the rest of the form
+               down. DISABLED, not merely empty: the hazard the previous design avoided — a
+               typeable box that turns into a closed select underneath a half-typed value — is
+               avoided here too, because nothing can be typed or chosen yet. -->
           <div class="wiki-field">
-            <p class="wiki-field__help" data-testid="wiki-access-brands-loading">
+            <label for="wiki-access-target-domain-loading-select">Target brand</label>
+            <select
+              id="wiki-access-target-domain-loading-select"
+              data-testid="wiki-access-target-domain-loading-select"
+              disabled
+              aria-busy="true"
+              aria-describedby="wiki-access-brands-loading"
+            >
+              <option value="">— loading brands… —</option>
+            </select>
+            <!-- A disabled control is NOT focusable and is skipped by keyboard and screen-reader
+                 traversal, so the state it is in has to be ANNOUNCED rather than merely drawn:
+                 role=status + aria-live carries it, and aria-describedby ties it to the control. -->
+            <p
+              class="wiki-field__help"
+              id="wiki-access-brands-loading"
+              role="status"
+              aria-live="polite"
+              data-testid="wiki-access-brands-loading"
+            >
               Loading the brands this server accepts…
             </p>
           </div>
