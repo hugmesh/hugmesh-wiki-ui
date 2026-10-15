@@ -205,12 +205,15 @@ export async function newE2eContext(browser: Browser): Promise<BrowserContext> {
  */
 export async function login(page: Page, user: SeedUser): Promise<void> {
   await page.goto('/login', { waitUntil: 'domcontentloaded' });
-  // The login remote exposes its form via formControlName selectors (the public
-  // selector contract shared across the HugMesh UIs).
-  await page.locator('input[formControlName="username"]').waitFor({ state: 'visible', timeout: 15_000 });
-  await page.fill('input[formControlName="username"]', user.username);
-  await page.fill('input[formControlName="password"]', passwordFor(user));
-  await page.click('button.login-btn');
+  // login-ui's form (login.component.html) is template-driven and carries NO
+  // formControlName; its selector contract is data-testid login-username /
+  // login-password / login-submit. The old formControlName-attribute input and
+  // login-btn class selectors matched nothing (measured 2026-09-23 against the
+  // compose stack: the username wait timed out on every "is logged in" row).
+  await page.locator('[data-testid="login-username"]').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.fill('[data-testid="login-username"]', user.username);
+  await page.fill('[data-testid="login-password"]', passwordFor(user));
+  await page.click('[data-testid="login-submit"]');
   await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 60_000 });
   await page.waitForFunction(
     () => {

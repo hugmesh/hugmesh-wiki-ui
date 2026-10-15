@@ -578,6 +578,65 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
       expect(selectOptions()).not.toContain('hugmesh');
     });
 
+    it('DECISION 33a: the picker is REQUIRED and blocks submit inline, before the round-trip', async () => {
+      // RATIFIED as built (operator, 2026-09-17, hugmesh-generator#347). The question put to
+      // the operator was whether to keep converting the bff's fail-closed 400 into a
+      // client-side error, or let the round-trip carry it. They kept it — so this pins the
+      // three parts that make it true, and a "just let the server say no" simplification
+      // turns it red.
+      wiki.brandCatalog.and.resolveTo(catalog({ brands: ['acme', 'globex'], launchDomain: 'hugmesh' }));
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      c.userSubject.set('u');
+
+      // 1. required — the control advertises it, so AT announces it before submit.
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')!
+        .getAttribute('aria-required')).toBe('true');
+      // 2. blocks — formValid() is false with a complete form but no brand.
+      expect(c.formValid())
+        .withContext('a complete form with no brand must not be submittable').toBeFalse();
+      // 3. INLINE and BEFORE the round-trip — no request is made at all.
+      await c.submit();
+      expect(wiki.grant).not.toHaveBeenCalled();
+      expect(wiki.ban).not.toHaveBeenCalled();
+      expect(wiki.timeout).not.toHaveBeenCalled();
+      fixture.detectChanges();
+      const err = el().querySelector('#wiki-access-target-domain-err');
+      expect(err).withContext('the refusal is rendered next to the field').not.toBeNull();
+      expect(err!.getAttribute('role')).toBe('alert');
+
+      // …and it stops blocking the moment a brand is chosen.
+      c.targetDomain.set('acme');
+      expect(c.formValid()).toBeTrue();
+      expect(c.targetInvalid()).toBeFalse();
+    });
+
+    it('DECISION 33a: required ONLY where the server said it reads the field', async () => {
+      // The other half of the ratified answer, and the reason it is not simply "always
+      // required": in every mode but `picker` the bff ignores targetDomain, so requiring one
+      // would block a write the server would have accepted.
+      wiki.brandCatalog.and.rejectWith(new WikiApiError(503, 'upstream down'));
+      wiki.observedBrands.and.resolveTo([]);
+      await renderAsSuperadmin();
+      const c = fixture.componentInstance;
+      expect(c.brandMode()).toBe('observed');
+      c.userSubject.set('u');
+      expect(c.formValid())
+        .withContext('the fallback combobox must never block a write on a blank brand').toBeTrue();
+      expect(c.targetInvalid()).toBeFalse();
+    });
+
+    it('DECISION 33c: the degrade deadline is EIGHT seconds', async () => {
+      // RATIFIED as built (operator, 2026-09-17). It is one number, and it is the only thing
+      // bounding how long a superadmin looks at a control they cannot use — so it is pinned
+      // as a literal rather than inferred from a timing test.
+      // Read off a freshly constructed component (the beforeEach fixture is a scoped ADMIN,
+      // so no catalogue read has been fired and no spec has had a chance to drive it down).
+      expect(fixture.componentInstance.catalogueDeadlineMs)
+        .withContext('decision 33c: 8 seconds before the console degrades to free text')
+        .toBe(8_000);
+    });
+
     it('blocks submit until a brand is chosen, inline — the bff 400s without one', async () => {
       wiki.brandCatalog.and.resolveTo(
         catalog({ brands: ['acme', 'globex'], launchDomain: 'hugmesh' }),
@@ -734,22 +793,232 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
       expect(el().querySelector('[data-testid="wiki-access-brands-loading"]')).toBeNull();
     });
 
-    it('renders no control at all while the catalogue is still in flight', async () => {
+    it('DECISION 33b: renders a DISABLED control while the catalogue is still in flight', async () => {
+      // Operator decision 33b (2026-09-17, hugmesh-generator#347), taken AGAINST the
+      // recommendation. What shipped was NO control at all; the point of the change is that
+      // the SHAPE OF THE FORM stops moving under the operator. Reverting to "render nothing"
+      // turns this red.
       wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>(() => {}));
       canManage.set(true);
       fixture = TestBed.createComponent(WikiAccessComponent);
       fixture.detectChanges();
-      expect(el().querySelector('[data-testid="wiki-access-brands-loading"]')).not.toBeNull();
-      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]'))
-        .withContext('a free-text box that turns into a closed select under a half-typed '
-          + 'value is how a typed brand gets silently discarded')
-        .toBeNull();
+
+      const loading = el().querySelector<HTMLSelectElement>(
+        '[data-testid="wiki-access-target-domain-loading-select"]');
+      expect(loading)
+        .withContext('decision 33b: a control is rendered while the read is in flight')
+        .not.toBeNull();
+      expect(loading!.tagName)
+        .withContext('the SAME kind of control the picker becomes, so it is filled in place')
+        .toBe('SELECT');
+      expect(loading!.disabled)
+        .withContext('DISABLED, not merely empty: nothing can be typed or chosen yet, so the '
+          + 'half-typed-value hazard the previous design avoided is avoided here too')
+        .toBeTrue();
+      expect(loading!.getAttribute('aria-busy')).toBe('true');
+
+      // A disabled control is skipped by keyboard and screen-reader traversal, so the state
+      // has to be ANNOUNCED, not merely drawn.
+      const help = el().querySelector('[data-testid="wiki-access-brands-loading"]');
+      expect(help).not.toBeNull();
+      expect(help!.getAttribute('role')).toBe('status');
+      expect(help!.getAttribute('aria-live')).toBe('polite');
+      expect(loading!.getAttribute('aria-describedby')).toBe(help!.id);
+
+      // Still NOT the real picker and NOT the typeable fallback — those are decided by the
+      // catalogue, and neither may be reachable before it answers.
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).toBeNull();
       expect(el().querySelector('[data-testid="wiki-access-target-domain"]')).toBeNull();
     });
 
-    // ── the control must never be LOST: `loading` renders nothing, so every way of
-    //    staying in it forever is a superadmin with less than the pre-catalogue console
-    //    gave them. Two ways existed, and both are closed below. ──
+    it('DECISION 33b: the disabled control is replaced IN PLACE when the catalogue answers', async () => {
+      // The whole gain is that the field does not appear from nowhere: the loading control and
+      // the picker occupy the same slot, so the form below it does not jump.
+      let land!: (c: BrandCatalog) => void;
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>((res) => { land = res; }));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.detectChanges();
+
+      const fieldsBefore = el().querySelectorAll('.wiki-field').length;
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-loading-select"]')).not.toBeNull();
+
+      land(catalog({ brands: ['acme', 'globex'], launchDomain: 'acme' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-loading-select"]')).toBeNull();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-select"]')).not.toBeNull();
+      expect(el().querySelectorAll('.wiki-field').length)
+        .withContext('the same number of fields before and after: nothing was pushed down')
+        .toBe(fieldsBefore);
+    });
+
+    it('DECISION 33b, the COST: the shape still changes on the degrade path', async () => {
+      // Recorded, not hidden. 33b stabilises the path that ends in `picker`; on 33c's
+      // deadline the control still changes TYPE, from a <select> to a typeable <input>.
+      // A future change that claims to have stabilised every path has to move this test.
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>(() => {}));
+      wiki.observedBrands.and.resolveTo(['branda']);
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      fixture.componentInstance.catalogueDeadlineMs = 10;
+      fixture.detectChanges();
+      expect(el().querySelector('[data-testid="wiki-access-target-domain-loading-select"]')!.tagName)
+        .toBe('SELECT');
+
+      await new Promise((r) => setTimeout(r, 40));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(el().querySelector('[data-testid="wiki-access-target-domain"]')!.tagName)
+        .withContext('the measured residual cost of 33b: SELECT -> INPUT on the degrade path')
+        .toBe('INPUT');
+    });
+
+    it('DECISION 33b, the COST measured: the CONTROL stops moving, the FIELD still grows', async () => {
+      // WHY THIS SPEC EXISTS. 33b was chosen "so the form's shape stops moving under the
+      // operator". It delivers that for the CONTROL and only partly for the FIELD, and the
+      // gap was not recorded anywhere until it was measured — the sibling spec above asserts
+      // the .wiki-field COUNT is unchanged, which is a proxy for "nothing was pushed down"
+      // and cannot see a height change at all.
+      //
+      // WHAT IS MEASURED HERE, in the real component with the real stylesheet at a pinned
+      // 640px: the disabled <select> and the picker's <select> are the SAME height, so the
+      // control is genuinely filled in place — but the field around it still grows, because
+      // the loading help is one line ("Loading the brands this server accepts…") and the
+      // picker's help is multi-sentence, carrying the brand COUNT and the default hint.
+      //
+      // WHY IT IS NOT SIMPLY FIXED. The picker's help is VARIABLE-height by design: it says
+      // something different for 0 brands than for 2, as the last assertion here proves. No
+      // fixed-size loading placeholder can match a height that depends on the very catalogue
+      // the component is still waiting for. Closing the residual therefore means a visual
+      // decision nobody has made — reserve a fixed help height, or move the count/default
+      // hint out of the help paragraph — so it is RECORDED here and on hugmesh-wiki-ui#3
+      // rather than quietly traded away.
+      let land!: (c: BrandCatalog) => void;
+      wiki.brandCatalog.and.returnValue(new Promise<BrandCatalog>((res) => { land = res; }));
+      canManage.set(true);
+      fixture = TestBed.createComponent(WikiAccessComponent);
+      // Pin the width: these are real layout measurements and the karma window is not a
+      // fixed size, so an unpinned width would make the numbers depend on the runner.
+      el().style.width = '640px';
+      fixture.detectChanges();
+
+      const fieldAround = (testid: string): HTMLElement => {
+        const node = el().querySelector<HTMLElement>(`[data-testid="${testid}"]`);
+        expect(node).withContext(`measuring: ${testid} must be present`).not.toBeNull();
+        return node!.closest('.wiki-field') as HTMLElement;
+      };
+      const h = (node: Element | null): number => node!.getBoundingClientRect().height;
+
+      const loadingSelect = el().querySelector('[data-testid="wiki-access-target-domain-loading-select"]');
+      const loadingFieldH = h(fieldAround('wiki-access-target-domain-loading-select'));
+      const loadingSelectH = h(loadingSelect);
+      const loadingHelpH = h(el().querySelector('[data-testid="wiki-access-brands-loading"]'));
+
+      land(catalog({ brands: ['acme', 'globex'], launchDomain: 'acme' }));
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      const pickerFieldH = h(fieldAround('wiki-access-target-domain-select'));
+      const pickerSelectH = h(el().querySelector('[data-testid="wiki-access-target-domain-select"]'));
+      const pickerHelpH = h(el().querySelector('#wiki-access-target-domain-help'));
+
+      const fieldGrowth = pickerFieldH - loadingFieldH;
+      const helpGrowth = pickerHelpH - loadingHelpH;
+      // Printed so the number in the PR body, the README and issue #3 can be re-derived from
+      // a test run instead of trusted.
+      // eslint-disable-next-line no-console
+      console.log(`[DECISION 33b residual @640px] field ${loadingFieldH.toFixed(2)} -> `
+        + `${pickerFieldH.toFixed(2)} (+${fieldGrowth.toFixed(2)}px); select `
+        + `${loadingSelectH.toFixed(2)} -> ${pickerSelectH.toFixed(2)}; help `
+        + `${loadingHelpH.toFixed(2)} -> ${pickerHelpH.toFixed(2)}`);
+
+      // 1. THE PART 33b DELIVERS: the control itself does not move or resize.
+      expect(Math.abs(pickerSelectH - loadingSelectH))
+        .withContext('decision 33b: the disabled select and the picker select are the same '
+          + 'control, so the control is filled in place and does not change height')
+        .toBeLessThan(0.5);
+
+      // 2. THE RESIDUAL, recorded rather than hidden: the field around it DOES still grow,
+      //    and it grows by the RECORDED AMOUNT — about two of this component's own line
+      //    boxes. Bounding it on BOTH sides is the point. `> 0` was not enough: padding the
+      //    loading help so the residual fell from +33.00px to +1.00px left this spec green
+      //    while the +33.00px written in the README and on hugmesh-wiki-ui#3 went stale —
+      //    measured, and the reason these bounds exist.
+      //
+      //    The bounds are expressed in units of the ONE-LINE loading help rather than in raw
+      //    pixels, so a different font or a different runner scales both sides together
+      //    instead of failing the build over font metrics. Any real change to the residual,
+      //    in EITHER direction, comes here and re-records it.
+      const lineBox = loadingHelpH; // the loading help is exactly one line
+      expect(fieldGrowth)
+        .withContext(`the measured cost of 33b: the field grows ~2 line boxes when the `
+          + `catalogue answers (recorded: +33.00px at a ${lineBox.toFixed(2)}px line box). If `
+          + `this is now smaller, the residual was reduced — good, but update this spec, the `
+          + `README and hugmesh-wiki-ui#3 together so the recorded number stays true`)
+        .toBeGreaterThan(lineBox * 1.5);
+      expect(fieldGrowth)
+        .withContext('the residual must not silently get WORSE either: a picker help that '
+          + 'grew to more lines would move the form further under the operator than the '
+          + 'recorded +33.00px')
+        .toBeLessThan(lineBox * 3.5);
+
+      // 3. ATTRIBUTION: all of that growth is the help paragraph, none of it the control.
+      expect(Math.abs(fieldGrowth - helpGrowth))
+        .withContext('the residual is the HELP TEXT growing from one line to the picker\'s '
+          + 'multi-sentence help, not the control')
+        .toBeLessThan(1);
+
+      // 4. 33b still removes the MAJORITY of the movement: what remains is a fraction of the
+      //    field, not a whole field arriving from nowhere (which is what the declined
+      //    render-nothing shape did).
+      expect(fieldGrowth)
+        .withContext('33b removes most of the jump: the residual is smaller than the loading '
+          + 'field itself')
+        .toBeLessThan(loadingFieldH);
+
+      // 5. WHY IT CANNOT SIMPLY BE PRE-SIZED: the picker's own help height depends on the
+      //    CATALOGUE — the very thing the loading state is still waiting for. Same width,
+      //    same component, three honest catalogues, three different heights.
+      const helpHeightFor = async (c: BrandCatalog): Promise<number> => {
+        wiki.brandCatalog.and.resolveTo(c);
+        const f = TestBed.createComponent(WikiAccessComponent);
+        (f.nativeElement as HTMLElement).style.width = '640px';
+        f.detectChanges();
+        await f.whenStable();
+        f.detectChanges();
+        const height = h((f.nativeElement as HTMLElement)
+          .querySelector('#wiki-access-target-domain-help'));
+        f.destroy();
+        return height;
+      };
+      // No brands at all, and the realistic 2+-brand deployment where the bff reports a
+      // launch domain that is NOT one of the configured brands (so the default hint is
+      // omitted) — see the preselect comment in the component.
+      const emptyHelpH = await helpHeightFor(catalog({ brands: [], launchDomain: null }));
+      const noDefaultHelpH = await helpHeightFor(
+        catalog({ brands: ['acme', 'globex'], launchDomain: null }));
+      const spread = Math.max(pickerHelpH, emptyHelpH, noDefaultHelpH)
+        - Math.min(pickerHelpH, emptyHelpH, noDefaultHelpH);
+      // eslint-disable-next-line no-console
+      console.log(`[DECISION 33b residual @640px] picker help is VARIABLE: `
+        + `${pickerHelpH.toFixed(2)}px (2 brands + default) / ${emptyHelpH.toFixed(2)}px (0 brands) / `
+        + `${noDefaultHelpH.toFixed(2)}px (2 brands, no default) — spread ${spread.toFixed(2)}px`);
+      expect(spread)
+        .withContext('the picker help is VARIABLE height (it reports the brand count and the '
+          + 'default hint), so no fixed-size loading placeholder can match it — this is why '
+          + 'the residual is a design decision, not an oversight')
+        .toBeGreaterThan(4);
+    });
+
+    // ── the control must never be LOST. Before decision 33b `loading` rendered nothing,
+    //    so every way of staying in it forever was a superadmin with LESS than the
+    //    pre-catalogue console gave them. 33b softens that (the loading state now draws a
+    //    disabled select), but it does not fix it: a disabled control is still not a usable
+    //    one, so staying in `loading` forever is still a superadmin who cannot act. Two ways
+    //    existed, and both are closed below. ──
 
     it('renders the control when the SESSION gains SUPERADMIN after this component initialised', async () => {
       // showTargetDomain is session.canManage, a LIVE signal: SessionService re-reads

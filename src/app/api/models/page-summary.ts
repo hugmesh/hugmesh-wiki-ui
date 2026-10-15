@@ -3,6 +3,7 @@
 
 export interface PageSummary {
   authorSubject?: string;
+  domain?: string;
   id?: string;
   slug?: string;
   title?: string;

@@ -81,6 +81,40 @@ test:
     expire_in: 7 days
 
 # -----------------------------------------------------------------------------
+# verify:spec — the #24 drift gate. Fails the pipeline when the committed
+# `openapi.json` (the ng-openapi-gen INPUT, refreshed only by the manual
+# `npm run gen:spec`) no longer matches hugmesh-wiki-bff-api's current spec, the
+# same failure mode `OpenApiSpecDumpTest` guards on the BFF side. Nothing ever
+# caught this before: `openapi.json` had a single commit since this repo's
+# initial public release and had measurably drifted (missing a path + 3
+# schemas — see #24).
+#
+# No live BFF server needed: `scripts/assert-spec-sync.mjs` only reads two JSON
+# files, so this job shallow-clones the BFF repo's default branch (mirrors the
+# hugmesh-generator sibling-clone in hugmesh-admin-ui's pentest:dast job) and
+# points WIKI_BFF_SPEC at its committed spec — the exact source `npm run
+# gen:spec` copies from locally. The checkout is mounted `:ro`; the script never
+# writes.
+# -----------------------------------------------------------------------------
+verify:spec:
+  stage: test
+  tags: [hugmesh-x86, privileged]
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - rm -rf .wiki-bff-api-spec-check
+    - git clone --depth 1 --branch main "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/hugmesh/hugmesh-wiki-bff-api.git" .wiki-bff-api-spec-check
+    - >-
+      docker run --rm
+      -v "${CI_PROJECT_DIR}:/workspace:ro"
+      -w /workspace
+      -e WIKI_BFF_SPEC=/workspace/.wiki-bff-api-spec-check/src/main/resources/openapi/openapi.json
+      node:24-alpine node scripts/assert-spec-sync.mjs
+
+# -----------------------------------------------------------------------------
 # e2e:bdd — Playwright + playwright-bdd Gherkin harness for the wiki-ui remote
 # (e2e/). WAVE 2b SHIPS DARK: every scenario that needs a live stack is tagged
 # `@cluster` and the default playwright config filters them out
