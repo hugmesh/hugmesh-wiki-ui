@@ -6,26 +6,27 @@
 # stepUp(base) = base AND MFA_SATISFIED while app.mfa.enabled=true, and is `base`
 # unchanged while it is false (the org default).
 #
-# THE GAP (re-checked 2026-09-23): unlike hugmesh-mod-bff-api (X-Mod-StepUp) and
-# hugmesh-forum-bff-api (X-Forum-StepUp), wiki-bff installs no access-denied handler
-# and emits no `X-Step-Up-Required` header, so an ARMED step-up refusal is
-# byte-identical to a plain role 403. Issue #4's 2026-09-18 comment names exactly
-# this as the blocker for the decision-21/35 consumer here: "a structured step-up
-# signal from the BFF … the same class of gap applies here". No consumer can tell
-# WHEN to mount the federated dialog until it lands. The server half is filed as
-# hugmesh-wiki-bff-api#35 (2026-09-23), which the `@fixme` row also carries.
+# THE SIGNAL (hugmesh-wiki-bff-api#35, merged as PR #38): wiki-bff installs an
+# access-denied handler (WikiStepUpAccessDeniedHandler) that renders the step-up
+# refusal as 403 + `X-Step-Up-Required: X-Wiki-StepUp` + a body carrying the legacy
+# `requires step-up` phrase, and only for the case where the role rule granted and
+# the MFA_SATISFIED leg denied. Every other denial keeps Spring's own response. The
+# consumer in this repo (src/app/step-up.ts, wiki-step-up.component.ts, mounted by
+# the manage view) reads exactly that.
 #
 # So:
-#   - the ROLE rows run on any stack today: a caller refused by the role half never
+#   - the ROLE rows run on any stack: a caller refused by the role half never
 #     carries a step-up signal (it must not, or the consumer would offer a challenge
 #     that can never let them through);
-#   - the ARMED row with `@fixme` asserts the CORRECT behaviour: the refusal names
-#     its flavour in `X-Step-Up-Required`, matching the platform detector's rule
-#     `^X-[A-Za-z0-9-]{1,60}-StepUp$` (mod-ui mfa/step-up-error.ts, forum-ui
-#     step-up.ts). It turns green, unmodified, the day wiki-bff emits any
-#     conforming signal — the header VALUE is deliberately not pinned, because
-#     wiki-bff has not chosen one;
-#   - the ARMED row without `@fixme` pins what an armed gate already does (403).
+#   - the ARMED rows need a stack with app.mfa.enabled=true on wiki-bff-api. The
+#     second one asserts the refusal names its flavour in `X-Step-Up-Required`,
+#     matching the platform detector's rule `^X-[A-Za-z0-9-]{1,60}-StepUp$`
+#     (mod-ui mfa/step-up-error.ts, forum-ui step-up.ts). The header VALUE is
+#     deliberately not pinned here; the unit spec step-up.spec.ts pins what this
+#     remote accepts.
+# Neither armed row has been executed against a live stack by the change that
+# removed the `@fixme` tag: that needs an armed mesh, and whether the gateway
+# forwards the header is not observed anywhere yet.
 # Armed rows skip loudly unless MFA_STEPUP_ARMED=1 (the variable the forum-ui and
 # mod-ui armed lanes use, so one armed stack serves all three).
 #
@@ -52,7 +53,7 @@ Feature: The wiki BFF's step-up refusals are recognisable on the wire
     When "superadmin" GETs "/bff/wiki/superadmin/audit" capturing the step-up signal
     Then the captured response status was 403
 
-  @fixme @issue:wiki-bff-api-35
+  @issue:wiki-bff-api-35
   Scenario: with the gate armed, a superadmin's refusal names its step-up flavour
     Given the platform MFA step-up gate is armed on this stack
     And "superadmin" is logged in

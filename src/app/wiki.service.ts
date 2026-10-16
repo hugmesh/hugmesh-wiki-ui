@@ -8,6 +8,7 @@ import { UpdatePage as UpdatePageModel } from './api/models/update-page';
 import { AuditEntry as AuditEntryModel } from './api/models/audit-entry';
 import { AuditList as AuditListModel } from './api/models/audit-list';
 import { Brands as BrandsModel } from './api/models/brands';
+import { StepUpRequirement, stepUpRequirementOf } from './step-up';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -237,9 +238,17 @@ export class WikiApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** Set when the bff refused this call for want of a fresh MFA stamp (see
+     *  {@link stepUpRequirementOf}); null for every other failure, including a
+     *  403 by role. */
+    readonly stepUp: StepUpRequirement | null = null,
   ) {
     super(message);
     this.name = 'WikiApiError';
+  }
+  /** A 403 that an MFA step-up would lift, as opposed to one a role denies. */
+  get isStepUpRequired(): boolean {
+    return this.stepUp !== null;
   }
   /** A 409 from create (duplicate slug) or update (stale expectedVersion). */
   get isConflict(): boolean {
@@ -315,7 +324,7 @@ export class WikiService {
         const j = body as Record<string, unknown>;
         detail = (j['message'] as string) ?? (j['error'] as string) ?? '';
       }
-      throw new WikiApiError(e.status, detail || `request failed: ${e.status}`);
+      throw new WikiApiError(e.status, detail || `request failed: ${e.status}`, stepUpRequirementOf(e));
     }
     throw e;
   }

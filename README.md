@@ -713,17 +713,35 @@ only).
   `/bff/*` calls use the HttpOnly `bff_` cookie, and the gateway swaps it for
   the internal custody JWT. The browser never holds a JWT (see **Session**
   above). This model is rolling out across the other HugMesh front ends.
-- **Planned — Casdoor MFA / step-up:** platform-wide MFA enforcement (WebAuthn
-  + TOTP + recovery codes, gateway `mfa_required` fail-closed + `amr`/`acr` →
-  `MFA_SATISFIED`, with step-up for sensitive operations) is designed at the
-  platform level. The wiki BFF already gates `/bff/wiki/admin/**` and
-  `/bff/wiki/superadmin/**` with `stepUp(...)` (`SecurityConfig`). That adds
-  `MFA_SATISFIED` to the role check only while `app.mfa.enabled=true`, and the
-  flag is off by default. This remote has no MFA code in `src/`. It cannot tell
-  a step-up refusal from a plain role 403, because the BFF emits no
-  `X-Step-Up-Required` signal yet (`hugmesh-wiki-bff-api#35`, open). The
-  remote's own tracking issue is `hugmesh-wiki-ui#4` (open). The e2e suite
-  pins the gap in `features/security/step-up-signal.feature`.
+- **Partly shipped — Casdoor MFA / step-up:** platform-wide MFA enforcement
+  (WebAuthn + TOTP + recovery codes, gateway `mfa_required` fail-closed +
+  `amr`/`acr` -> `MFA_SATISFIED`, with step-up for sensitive operations) is
+  designed at the platform level. The wiki BFF gates `/bff/wiki/admin/**` and
+  `/bff/wiki/superadmin/**` with `stepUp(...)` (`SecurityConfig`), which adds
+  `MFA_SATISFIED` to the role check only while `app.mfa.enabled=true`; the flag
+  is off by default. When the role granted and the stamp is missing, the BFF
+  answers 403 with `X-Step-Up-Required: X-Wiki-StepUp` and a body containing
+  `requires step-up` (`hugmesh-wiki-bff-api#35`, merged). A role refusal carries
+  neither.
+  - **Consumer, manage view only:** `src/app/step-up.ts` recognises that refusal
+    (the header, or the phrase when a hop drops it; 403 only), and
+    `WikiApiError.stepUp` carries it. A refused read in the manage view
+    (active overrides, history, audit trail) opens `hug-wiki-step-up`, which
+    loads login-ui's federated dialog on demand (`src/app/mfa-step-up.ts`).
+    `satisfied` re-reads exactly the refused sections, `dismissed` retries
+    nothing, and `unavailable` or a failed load shows the
+    `/login/mfa/challenge?returnTo=` link.
+  - **Decision 35:** the remote entry is the one exported constant
+    `LOGIN_REMOTE_ENTRY` (`/login/remoteEntry.json`), pinned by a spec. It is a
+    second copy of the `login` row in hugmesh-host-shell's
+    `federation.manifest.prod.json`. A federation-api `federation_modules` row
+    outranks that file at runtime, and `ng serve` uses a different `login` URL;
+    in either case this remote falls back to the link.
+  - **Not covered yet:** the `/bff/wiki/admin/**` calls (page writes, the access
+    console) still show their plain error on a step-up refusal. The live round
+    trip (the dialog against a mesh with `app.mfa.enabled=true`) and the header
+    reaching the browser through the gateway have not been observed. The
+    remote's tracking issue is `hugmesh-wiki-ui#4`.
 
 ## Known gaps / TODO
 
