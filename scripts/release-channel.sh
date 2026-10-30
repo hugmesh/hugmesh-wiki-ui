@@ -51,6 +51,9 @@ if [[ ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-beta\.[1-9][0-9]*)?$ ]]; th
   die "version '$version' is not MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-beta.N"
 fi
 line="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+# Peel to the commit (a signed tag is an annotated tag object).
+sha="$(git rev-parse --verify --quiet "$sha^{commit}")" ||
+  die "$GITHUB_SHA is not a commit in this checkout"
 sha12="${sha:0:12}"
 
 # commit_on_branch BRANCH: exit 0 when $sha is on $remote's BRANCH, 1 when it

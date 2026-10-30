@@ -10,7 +10,11 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 script="$here/release-channel.sh"
 workflow="$root/.github/workflows/release.yml"
-image=ghcr.io/hugmesh/hugmesh-wiki-ui
+image="$(sed -n 's/^  IMAGE_NAME: *//p' "$workflow")"
+if [ -z "$image" ]; then
+  echo "FAIL: no env IMAGE_NAME in $workflow" >&2
+  exit 1
+fi
 
 work="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/release-channel-test.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
@@ -122,6 +126,16 @@ expect_refused() { # expect_refused NAME TEXT-IN-ERROR
 s12() { printf '%s' "${1:0:12}"; }
 
 # --- the required cases ------------------------------------------------------
+# A signed stable tag is an annotated tag object; GITHUB_SHA may name it.
+g tag -a -m 'annotated' v0.4.1-object "$r41"
+run_case "annotated tag object" 0.4.1 refs/tags/v0.4.1 "$(g rev-parse v0.4.1-object)"
+expect_ok "an annotated tag object is peeled to its commit" release stable true true \
+  "0.4 0.4.1 latest sha-$(s12 "$r41")"
+g tag -d v0.4.1-object >/dev/null
+
+run_case "not a commit" 0.4.1 refs/tags/v0.4.1 "$(printf '%040d' 0)"
+expect_refused "an unknown GITHUB_SHA is refused" "is not a commit in this checkout"
+
 run_case "beta tag on main" 0.5.0-beta.1 refs/tags/v0.5.0-beta.1 "$m6"
 expect_ok "beta tag on main -> :X.Y.Z-beta.N + :beta, no :X.Y/:latest" release beta false false \
   "0.5.0-beta.1 beta sha-$(s12 "$m6")"
