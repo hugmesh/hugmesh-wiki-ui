@@ -11,22 +11,34 @@
 #                                                  (the commit must be on main)
 #   refs/tags/vX.Y.Z         X.Y.Z                 kind=release channel=stable
 #                                                  :X.Y.Z + :sha-<12>, plus
-#                                                  :X.Y     if no other vX.Y.* is newer
-#                                                  :latest  if no other v*.*.* is newer
+#                                                  :X.Y     if no newer vX.Y.* is published
+#                                                  :latest  if no newer v*.*.* is published
 #                                                  (the commit must be on release/X.Y)
 #   anything else            -                     refused
 #
 # "Newer" is decided with sort -V over the repository's own stable tags
 # (vMAJOR.MINOR.PATCH, read from the remote with ls-remote), ignoring the tag
-# being released. So a patch on the newest stable line moves :X.Y and :latest,
-# a patch on an older line moves :X.Y but not :latest, and re-running an old
-# release never moves a floating tag backwards. A beta never moves :X.Y or
-# :latest. :X.Y.Z itself is immutable (the workflow's overwrite guard).
+# being released. "Published" means the image :A.B.C is in the registry, so a
+# refused or mistaken stable tag, which never got an image, holds nothing back.
+# So a patch on the newest stable line moves :X.Y and :latest, a patch on an
+# older line moves :X.Y but not :latest, and re-running an old stable release
+# never moves :X.Y or :latest backwards. A beta never moves :X.Y or :latest.
+# :X.Y.Z itself is immutable (the workflow's overwrite guard). :beta has no such
+# check: it follows the most recent beta run.
+#
+# The answer goes stale, because a newer stable can publish after this runs. A
+# "Re-run failed jobs" also reuses the outputs of a version job that passed. So
+# the workflow runs this script again in the image job right before the push
+# and in the github-release job right before gh release create, and those two
+# answers are the only ones it acts on. The version job's run only refuses early.
 #
 # Input (environment): VERSION (already read from the version file),
 # GITHUB_REF, GITHUB_SHA, IMAGE_NAME; optional VERSION_FILE (named in error
 # messages) and RELEASE_REMOTE (default origin). It must run inside a git
-# checkout whose RELEASE_REMOTE is the GitHub repository.
+# checkout with full history whose RELEASE_REMOTE is the GitHub repository.
+# It asks ghcr.io with curl and an anonymous pull token, so it needs no docker
+# and no login (it may run on a self-hosted runner). It contacts the registry
+# only when a newer stable tag exists.
 #
 # Output (stdout, GITHUB_OUTPUT format): version, kind, channel, line, sha12,
 # move_minor, move_latest and the multi-line image_tags. Every refusal is a
@@ -98,6 +110,35 @@ is_newest() {
   [ "$top" = "$1" ]
 }
 
+# image_published VERSION: exit 0 when $image:VERSION is in the registry, 1 when
+# the registry says it is not. Any other answer refuses (exit via die), so an
+# outage can never pass for "not published" and move a floating tag backwards.
+image_published() {
+  local repo
+  local token
+  local code
+  case "$image" in
+    ghcr.io/*) repo="${image#ghcr.io/}" ;;
+    *) die "cannot ask the registry about $image: only ghcr.io images are supported" ;;
+  esac
+  token="$(curl -fsS --retry 2 --max-time 30 "https://ghcr.io/token?scope=repository:$repo:pull" |
+    sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" ||
+    die "could not get a pull token for $image from ghcr.io, so could not tell whether $image:$1 is published"
+  if [ -z "$token" ]; then
+    die "ghcr.io gave no pull token for $image, so could not tell whether $image:$1 is published"
+  fi
+  code="$(curl -sS --retry 2 --max-time 30 -o /dev/null -w '%{http_code}' -I \
+    -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+    "https://ghcr.io/v2/$repo/manifests/$1")" ||
+    die "could not ask ghcr.io whether $image:$1 is published"
+  case "$code" in
+    200) return 0 ;;
+    404) return 1 ;;
+    *) die "could not tell whether $image:$1 is published: ghcr.io answered HTTP $code" ;;
+  esac
+}
+
 channel=none
 move_minor=false
 move_latest=false
@@ -145,12 +186,23 @@ case "$ref" in
           die "stable tag $tag points at $sha, which is not on release/$line. A stable tag (vX.Y.Z) is cut from release/X.Y only, never from main or another line; a beta tag (vX.Y.Z-beta.N) is cut from main."
         fi
         all="$(stable_versions)"
-        others="$(printf '%s\n' "$all" | awk -v v="$version" 'NF && $0 != v')"
-        same_line="$(printf '%s\n' "$others" | awk -v p="$line." 'index($0, p) == 1')"
-        if is_newest "$version" "$same_line"; then
+        # Only a newer tag can hold a floating tag back, and only if its image
+        # exists. A stable tag that was refused, or never finished, has none.
+        newer_published=""
+        while IFS= read -r other; do
+          [ -n "$other" ] || continue
+          if is_newest "$version" "$other"; then
+            continue
+          fi
+          if image_published "$other"; then
+            newer_published="$newer_published$other"$'\n'
+          fi
+        done <<<"$all"
+        same_line="$(printf '%s' "$newer_published" | awk -v p="$line." 'index($0, p) == 1')"
+        if [ -z "$same_line" ]; then
           move_minor=true
         fi
-        if is_newest "$version" "$others"; then
+        if [ -z "$newer_published" ]; then
           move_latest=true
         fi
         tags="$image:$version"

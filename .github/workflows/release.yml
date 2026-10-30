@@ -14,9 +14,9 @@ name: Release
 #   push of tag vX.Y.Z (stable)    -> :X.Y.Z, :X.Y, :latest and :sha-<12 hex>,
 #                                     plus a GitHub release marked Latest. The
 #                                     commit must be on release/X.Y. A patch on an
-#                                     older line (a newer stable vA.B.C exists)
-#                                     moves :X.Y but not :latest, and its GitHub
-#                                     release is not marked Latest.
+#                                     older line (a newer stable vA.B.C is
+#                                     published) moves :X.Y but not :latest, and
+#                                     its GitHub release is not marked Latest.
 #   workflow_dispatch on main, a release/X.Y branch or a v* tag
 #                                  -> same as the push; for a tag, an image or
 #                                     GitHub release that already exists is left
@@ -28,6 +28,15 @@ name: Release
 # A tag must equal "v" + that version. :X.Y.Z is never overwritten; the
 # floating tags :beta, :X.Y and :latest move. Every tag a run pushes points at
 # one digest, and that digest is signed and attested.
+#
+# The version job only refuses early. "Re-run failed jobs" reuses its outputs,
+# however old they are, and a newer stable can publish while a run is in its
+# test job, so whether :X.Y and :latest move is decided again by the same script
+# right before the push and right before gh release create. No later job reads
+# the version job's answer, so a re-run cannot move a floating tag to an older
+# line. A window of seconds remains between that check and the registry write
+# (a registry has no compare-and-swap); if a concurrent run wins it, the digest
+# check below fails that run.
 #
 # This workflow has no pull_request trigger and must never get one. Jobs run on
 # the self-hosted runner only when the repo variable RUNS_ON_PUBLISH is set
@@ -60,9 +69,6 @@ jobs:
       channel: ${{ steps.v.outputs.channel }}
       line: ${{ steps.v.outputs.line }}
       sha12: ${{ steps.v.outputs.sha12 }}
-      move_minor: ${{ steps.v.outputs.move_minor }}
-      move_latest: ${{ steps.v.outputs.move_latest }}
-      image_tags: ${{ steps.v.outputs.image_tags }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -128,11 +134,11 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       KIND: ${{ needs.version.outputs.kind }}
       SHA12: ${{ needs.version.outputs.sha12 }}
-      MOVE_LATEST: ${{ needs.version.outputs.move_latest }}
-      IMAGE_TAGS: ${{ needs.version.outputs.image_tags }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -188,18 +194,32 @@ jobs:
               ;;
           esac
 
+      # Builds now and pushes nothing, so the step that pushes finds every layer
+      # in the builder's cache and takes seconds. The tag check below would
+      # otherwise be as old as the whole build by the time the tags are written.
+      - name: Build the image (no push)
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          pull: true
+
       - name: Compute tags and labels
         id: meta
         if: steps.exists.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          # The tag list was decided by scripts/release-channel.sh in the
-          # version job: beta -> :X.Y.Z-beta.N + :beta; stable -> :X.Y.Z plus
-          # :X.Y and :latest when this is the newest release of its line / of
-          # all lines; every run adds :sha-<12>.
-          tags="$IMAGE_TAGS"
+          # scripts/release-channel.sh decides the tag list here, right before
+          # the push, not in the version job: beta -> :X.Y.Z-beta.N + :beta;
+          # stable -> :X.Y.Z plus :X.Y and :latest when nothing newer is
+          # published on its line / on any line; every run adds :sha-<12>.
+          out="$(VERSION_FILE=package.json bash scripts/release-channel.sh)"
+          echo "$out"
+          tags="$(printf '%s\n' "$out" | sed -n '/^image_tags<<EOF_IMAGE_TAGS$/,/^EOF_IMAGE_TAGS$/p' | sed '1d;$d')"
+          move_latest="$(printf '%s\n' "$out" | sed -n 's/^move_latest=//p')"
           if [ -z "$tags" ]; then
-            echo "::error::the version job computed no image tags"
+            echo "::error::scripts/release-channel.sh computed no image tags"
             exit 1
           fi
           while IFS= read -r t; do
@@ -214,6 +234,7 @@ jobs:
             label_version="$GITHUB_REF_NAME"
           fi
           {
+            echo "move_latest=$move_latest"
             echo "tags<<EOF_TAGS"
             echo "$tags"
             echo "EOF_TAGS"
@@ -250,6 +271,7 @@ jobs:
           METADATA: ${{ steps.build.outputs.metadata }}
           DIGEST: ${{ steps.build.outputs.digest }}
           EXPECTED_TAGS: ${{ steps.meta.outputs.tags }}
+          MOVE_LATEST: ${{ steps.meta.outputs.move_latest }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -272,7 +294,7 @@ jobs:
           if sorted(tags) != expected:
               sys.exit(f"::error::pushed tags {sorted(tags)} are not the computed tags {expected}")
           # :latest only for a stable version that owns it (MOVE_LATEST from the
-          # version job). The "-" fallback makes a missing or EMPTY VERSION fail
+          # check right before the push). The "-" fallback makes a missing or EMPTY VERSION fail
           # closed (a job output that was never set arrives as "", not unset).
           if "latest" in tags and ("-" in (os.environ.get("VERSION") or "-") or os.environ.get("MOVE_LATEST") != "true"):
               sys.exit("::error::a :latest tag was pushed; beta images and older-line patches must never be tagged latest")
@@ -333,7 +355,14 @@ jobs:
           set -euo pipefail
           while IFS= read -r ref; do
             [ -n "$ref" ] || continue
-            got="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')"
+            # A digest is the sha256 of the manifest's exact bytes, which --raw
+            # prints. Do not use --format '{{.Manifest.Digest}}': buildx answers
+            # any format that starts with {{.Manifest with its full listing.
+            if ! raw_sha="$(docker buildx imagetools inspect "$ref" --raw | sha256sum)"; then
+              echo "::error::could not read $ref from the registry"
+              exit 1
+            fi
+            got="sha256:${raw_sha%% *}"
             if [ "$got" != "$DIGEST" ]; then
               echo "::error::$ref resolves to $got, not the signed digest $DIGEST"
               exit 1
@@ -365,12 +394,18 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      MOVE_LATEST: ${{ needs.version.outputs.move_latest }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       # beta -> prerelease, never Latest. stable -> a full release, marked
-      # Latest only when it is the newest stable of all lines (gh would
-      # otherwise pick Latest by date and mislabel an older-line patch).
+      # Latest only when nothing newer is published on any line (gh would
+      # otherwise pick Latest by date and mislabel an older-line patch). That is
+      # decided here, right before the release is created: a newer stable may
+      # have published since the image job, or days ago if this is a re-run.
       - name: Create the GitHub release
         run: |
           set -euo pipefail
@@ -382,7 +417,10 @@ jobs:
           case "$VERSION" in
             *-*) args+=(--prerelease --latest=false) ;;
             *)
-              if [ "$MOVE_LATEST" = true ]; then
+              out="$(VERSION_FILE=package.json bash scripts/release-channel.sh)"
+              echo "$out"
+              move_latest="$(printf '%s\n' "$out" | sed -n 's/^move_latest=//p')"
+              if [ "$move_latest" = true ]; then
                 args+=(--latest)
               else
                 args+=(--latest=false)
