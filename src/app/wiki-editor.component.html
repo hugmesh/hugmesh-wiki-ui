@@ -105,5 +105,10 @@
         </span>
       </div>
     </form>
+    <!-- Outside the form on purpose: the federated dialog may carry a form of its
+         own, and its submit must never bubble into this one's (ngSubmit). -->
+    @if (stepUp.open()) {
+      <hug-wiki-step-up (satisfied)="onStepUpSatisfied()" (dismissed)="onStepUpDismissed()" />
+    }
   }
 </div>

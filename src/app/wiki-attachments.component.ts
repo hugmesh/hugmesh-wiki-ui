@@ -3,6 +3,8 @@ import { CommonModule } from '@angular/common';
 
 import { WikiService, WikiAttachment, WikiApiError } from './wiki.service';
 import { SessionService } from './session.service';
+import { StepUpOffer, stepUpMessage } from './step-up-offer';
+import { WikiStepUpComponent } from './wiki-step-up.component';
 
 /**
  * The per-page ATTACHMENTS panel — the UI over hugmesh-wiki-bff-api's
@@ -28,7 +30,7 @@ import { SessionService } from './session.service';
 @Component({
   selector: 'hug-wiki-attachments',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, WikiStepUpComponent],
   templateUrl: './wiki-attachments.component.html',
   styleUrl: './wiki-attachments.component.scss',
 })
@@ -55,6 +57,10 @@ export class WikiAttachmentsComponent {
   /** WIKI_WRITE = ADMIN | SUPERADMIN — the upload/delete gate (mirrors the bff). */
   readonly canWrite = this.session.canWrite;
 
+  /** The identity-check offer for an upload/delete the bff refused for want of a
+   *  fresh MFA stamp (hugmesh-wiki-ui#4). A role 403 never opens it. */
+  readonly stepUp = new StepUpOffer();
+
   constructor() {
     // Reload whenever the page slug changes (the page view stays mounted across
     // /pages/:slug param-only navigations, and so does this panel).
@@ -65,6 +71,8 @@ export class WikiAttachmentsComponent {
   }
 
   async reload(slug: string): Promise<void> {
+    // A write refused on another page must not be retried from this one.
+    if (slug !== this.offerSlug) this.stepUp.dismiss();
     this.loading.set(true);
     this.loadError.set('');
     this.notice.set('');
@@ -96,14 +104,23 @@ export class WikiAttachmentsComponent {
       this.actionError.set('Choose a file to upload first.');
       return;
     }
+    this.stepUp.dismiss();
+    await this.runUpload(this.slug(), file, fileInput);
+  }
+
+  /** One upload, its page and file fixed by the caller so a step-up retry
+   *  re-sends exactly what was refused. */
+  private async runUpload(slug: string, file: File, fileInput: HTMLInputElement): Promise<void> {
     this.uploading.set(true);
+    this.actionError.set('');
     try {
-      const saved = await this.wiki.uploadAttachment(this.slug(), file);
+      const saved = await this.wiki.uploadAttachment(slug, file);
       this.notice.set(`Uploaded ${saved.filename}.`);
       this.file.set(null);
       fileInput.value = '';
       await this.refreshList();
     } catch (e) {
+      if (this.offerStepUp(e, slug, 'Uploading this attachment', () => this.runUpload(slug, file, fileInput))) return;
       this.actionError.set(this.message(e, 'upload'));
     } finally {
       this.uploading.set(false);
@@ -115,16 +132,47 @@ export class WikiAttachmentsComponent {
     if (!this.canWrite() || this.busyFile()) return;
     this.actionError.set('');
     this.notice.set('');
+    this.stepUp.dismiss();
+    await this.runRemove(this.slug(), filename);
+  }
+
+  /** One delete, its page and filename fixed by the caller (see runUpload). */
+  private async runRemove(slug: string, filename: string): Promise<void> {
     this.busyFile.set(filename);
+    this.actionError.set('');
     try {
-      await this.wiki.deleteAttachment(this.slug(), filename);
+      await this.wiki.deleteAttachment(slug, filename);
       this.notice.set(`Deleted ${filename}.`);
       await this.refreshList();
     } catch (e) {
+      if (this.offerStepUp(e, slug, `Deleting ${filename}`, () => this.runRemove(slug, filename))) return;
       this.actionError.set(this.message(e, 'delete'));
     } finally {
       this.busyFile.set('');
     }
+  }
+
+  /** The identity check passed: re-issue the refused write, unchanged, once. */
+  onStepUpSatisfied(): void {
+    this.actionError.set('');
+    this.stepUp.satisfy();
+  }
+
+  /** "Not now": close the offer and write nothing; the message stays. */
+  onStepUpDismissed(): void {
+    this.stepUp.dismiss();
+  }
+
+  /** The page a held retry belongs to, so a slug change can drop it. */
+  private offerSlug = '';
+
+  /** Hand a step-up refusal to {@link stepUp} and say so in place of the role
+   *  message. Any other failure (a role 403 included) is left to the caller. */
+  private offerStepUp(e: unknown, slug: string, what: string, retry: () => Promise<void>): boolean {
+    if (!this.stepUp.offer(e, retry)) return false;
+    this.offerSlug = slug;
+    this.actionError.set(stepUpMessage(what));
+    return true;
   }
 
   /** Fetch the bytes through the bff (the HttpOnly bff_ cookie rides the

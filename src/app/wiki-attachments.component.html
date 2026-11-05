@@ -53,6 +53,9 @@
   @if (actionError()) {
     <p class="wiki-error" role="alert" data-testid="wiki-att-error">{{ actionError() }}</p>
   }
+  @if (stepUp.open()) {
+    <hug-wiki-step-up (satisfied)="onStepUpSatisfied()" (dismissed)="onStepUpDismissed()" />
+  }
 
   <div class="wiki-attachments__upload wiki-field">
     <label for="wiki-att-file">Add an attachment</label>

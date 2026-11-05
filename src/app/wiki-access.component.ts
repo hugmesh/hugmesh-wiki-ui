@@ -4,8 +4,17 @@ import { FormsModule } from '@angular/forms';
 
 import { WikiService, WikiAccess, WikiApiError, suggestableBrand, BrandCatalog } from './wiki.service';
 import { SessionService } from './session.service';
+import { StepUpOffer, stepUpMessage } from './step-up-offer';
+import { WikiStepUpComponent } from './wiki-step-up.component';
 
 type AccessAction = 'grant' | 'timeout' | 'ban';
+
+/** How each access write is named in the step-up copy. */
+const STEP_UP_WHAT: Readonly<Record<AccessAction, string>> = {
+  grant: 'Granting wiki read',
+  timeout: 'Timing this user out',
+  ban: 'Banning this user',
+};
 
 /**
  * How the target-brand control should render — decided by what the bff's brand catalogue
@@ -157,7 +166,7 @@ function mergeBrands(a: readonly string[], b: readonly string[]): string[] {
 @Component({
   selector: 'hug-wiki-access',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, WikiStepUpComponent],
   templateUrl: './wiki-access.component.html',
   styleUrl: './wiki-access.component.scss',
 })
@@ -237,6 +246,10 @@ export class WikiAccessComponent {
   readonly result = signal<WikiAccess | null>(null);
   readonly notice = signal('');
   readonly touched = signal(false);
+
+  /** The identity-check offer for an access write the bff refused for want of a
+   *  fresh MFA stamp (hugmesh-wiki-ui#4). A role 403 never opens it. */
+  readonly stepUp = new StepUpOffer();
 
   readonly actions: ReadonlyArray<{ value: AccessAction; label: string; help: string }> = [
     { value: 'grant', label: 'Grant read', help: 'Give a user permanent wiki read access.' },
@@ -487,33 +500,71 @@ export class WikiAccessComponent {
     const target =
       this.showTargetDomain() && !brandIsDiscarded ? this.targetDomain().trim() : '';
     const brand = target ? { targetDomain: target } : {};
-    try {
-      let row: WikiAccess;
-      switch (this.action()) {
-        case 'grant':
-          row = await this.wiki.grant({ userSubject: user, reason, ...brand });
-          break;
-        case 'ban':
-          row = await this.wiki.ban({ userSubject: user, reason, ...brand });
-          break;
-        case 'timeout':
-        default:
-          // Convert hours to ttlSeconds for the BFF body.
-          row = await this.wiki.timeout({
-            userSubject: user,
-            ttlSeconds: Math.round(this.timeoutHours() * 3600),
-            reason,
-            ...brand,
-          });
-          break;
+    const action = this.action();
+    let request: () => Promise<WikiAccess>;
+    switch (action) {
+      case 'grant': {
+        const body = { userSubject: user, reason, ...brand };
+        request = () => this.wiki.grant(body);
+        break;
       }
+      case 'ban': {
+        const body = { userSubject: user, reason, ...brand };
+        request = () => this.wiki.ban(body);
+        break;
+      }
+      case 'timeout':
+      default: {
+        // Convert hours to ttlSeconds for the BFF body.
+        const body = {
+          userSubject: user,
+          ttlSeconds: Math.round(this.timeoutHours() * 3600),
+          reason,
+          ...brand,
+        };
+        request = () => this.wiki.timeout(body);
+        break;
+      }
+    }
+    // A new write supersedes one still waiting on the identity check.
+    this.stepUp.dismiss();
+    await this.apply(request, action);
+  }
+
+  /**
+   * Issue one grant/ban/timeout. The request's body is fixed by the caller, so a
+   * step-up retry re-sends exactly the refused write even if the form has moved on.
+   *
+   * @param request - The write, its body already built.
+   * @param action - Which write it is, for the step-up copy.
+   */
+  private async apply(request: () => Promise<WikiAccess>, action: AccessAction): Promise<void> {
+    this.busy.set(true);
+    this.error.set('');
+    try {
+      const row = await request();
       this.result.set(row);
       this.learnBrand(row.domain);
     } catch (e) {
+      if (this.stepUp.offer(e, () => this.apply(request, action))) {
+        this.error.set(stepUpMessage(STEP_UP_WHAT[action]));
+        return;
+      }
       this.error.set(this.message(e));
     } finally {
       this.busy.set(false);
     }
+  }
+
+  /** The identity check passed: re-issue the refused write, unchanged, once. */
+  onStepUpSatisfied(): void {
+    this.error.set('');
+    this.stepUp.satisfy();
+  }
+
+  /** "Not now": close the offer and write nothing; the message stays. */
+  onStepUpDismissed(): void {
+    this.stepUp.dismiss();
   }
 
   /**
@@ -545,6 +596,12 @@ export class WikiAccessComponent {
    * @param ok - The success message to show in the live region.
    */
   private async runRevoke(type: 'read' | 'banned', user: string, ok: string): Promise<void> {
+    this.stepUp.dismiss();
+    await this.revokeOnce(type, user, ok);
+  }
+
+  /** One revoke, its arguments fixed so a step-up retry re-sends exactly it. */
+  private async revokeOnce(type: 'read' | 'banned', user: string, ok: string): Promise<void> {
     this.busy.set(true);
     this.error.set('');
     this.notice.set('');
@@ -554,6 +611,10 @@ export class WikiAccessComponent {
       // Clear the previous result row so the template reflects the revoked state.
       this.result.set(null);
     } catch (e) {
+      if (this.stepUp.offer(e, () => this.revokeOnce(type, user, ok))) {
+        this.error.set(stepUpMessage(type === 'banned' ? 'Lifting this ban' : 'Removing this grant'));
+        return;
+      }
       this.error.set(this.message(e));
     } finally {
       this.busy.set(false);

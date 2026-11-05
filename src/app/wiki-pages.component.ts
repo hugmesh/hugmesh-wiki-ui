@@ -4,6 +4,8 @@ import { RouterLink } from '@angular/router';
 
 import { WikiService, PageSummary, WikiApiError } from './wiki.service';
 import { SessionService } from './session.service';
+import { StepUpOffer, stepUpMessage } from './step-up-offer';
+import { WikiStepUpComponent } from './wiki-step-up.component';
 
 /**
  * The CONTENT view — lists the wiki pages (WikiDto.PageSummary) via
@@ -39,7 +41,7 @@ import { SessionService } from './session.service';
 @Component({
   selector: 'hug-wiki-pages',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, WikiStepUpComponent],
   templateUrl: './wiki-pages.component.html',
   styleUrl: './wiki-pages.component.scss',
 })
@@ -53,6 +55,10 @@ export class WikiPagesComponent implements OnInit {
 
   /** WIKI_WRITE gate: show the "New page" and per-row "Edit"/"Delete" affordances. */
   readonly canWrite = this.session.canWrite;
+
+  /** The identity-check offer for a delete the bff refused for want of a fresh MFA
+   *  stamp (hugmesh-wiki-ui#4). A role 403 never opens it. */
+  readonly stepUp = new StepUpOffer();
 
   /** The page ID whose inline delete confirmation is armed, or null when none is.
    *  Single-valued on purpose: arming one row disarms any other. Keyed on the row
@@ -155,6 +161,14 @@ export class WikiPagesComponent implements OnInit {
    */
   async remove(p: PageSummary): Promise<void> {
     if (!this.canWrite() || this.deletingId()) return;
+    // A new delete supersedes one still waiting on the identity check.
+    this.stepUp.dismiss();
+    await this.removeOnce(p);
+  }
+
+  /** One DELETE of `p` and its confirming re-read; `p` is the row the user
+   *  confirmed, so a step-up retry re-issues exactly the refused call. */
+  private async removeOnce(p: PageSummary): Promise<void> {
     this.deletingId.set(p.id);
     this.actionError.set('');
     this.notice.set('');
@@ -162,7 +176,11 @@ export class WikiPagesComponent implements OnInit {
     try {
       await this.wiki.deletePage(p.slug);
     } catch (e) {
-      this.actionError.set(this.deleteMessage(e));
+      if (this.stepUp.offer(e, () => this.removeOnce(p))) {
+        this.actionError.set(stepUpMessage(`Deleting ${p.slug}`));
+      } else {
+        this.actionError.set(this.deleteMessage(e));
+      }
       this.deletingId.set(null);
       return;
     }
@@ -195,6 +213,17 @@ export class WikiPagesComponent implements OnInit {
       this.confirmingId.set(null);
       this.deletingId.set(null);
     }
+  }
+
+  /** The identity check passed: re-issue the refused delete, unchanged, once. */
+  onStepUpSatisfied(): void {
+    this.actionError.set('');
+    this.stepUp.satisfy();
+  }
+
+  /** "Not now": close the offer and delete nothing; the message stays. */
+  onStepUpDismissed(): void {
+    this.stepUp.dismiss();
   }
 
   /**

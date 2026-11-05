@@ -105,6 +105,9 @@
     @if (error()) {
       <p class="wiki-error" role="alert" data-testid="wiki-view-action-error">{{ error() }}</p>
     }
+    @if (stepUp.open()) {
+      <hug-wiki-step-up (satisfied)="onStepUpSatisfied()" (dismissed)="onStepUpDismissed()" />
+    }
 
     <article
       class="wiki-view__body wiki-panel"

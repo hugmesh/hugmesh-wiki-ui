@@ -7,6 +7,8 @@ import { WikiService, WikiPage, WikiApiError } from './wiki.service';
 import { SessionService } from './session.service';
 import { sanitizeContentHtml } from './markdown';
 import { WikiAttachmentsComponent } from './wiki-attachments.component';
+import { StepUpOffer, stepUpMessage } from './step-up-offer';
+import { WikiStepUpComponent } from './wiki-step-up.component';
 
 /**
  * Whether the confirming re-read can be decided by row IDENTITY at all.
@@ -86,7 +88,7 @@ function brandClause(domain: unknown): string {
 @Component({
   selector: 'hug-wiki-page-view',
   standalone: true,
-  imports: [CommonModule, RouterLink, WikiAttachmentsComponent],
+  imports: [CommonModule, RouterLink, WikiAttachmentsComponent, WikiStepUpComponent],
   templateUrl: './wiki-page-view.component.html',
   styleUrl: './wiki-page-view.component.scss',
 })
@@ -130,6 +132,10 @@ export class WikiPageViewComponent implements OnInit {
   /** WIKI_WRITE gate: show the Edit, Publish and Delete controls. */
   readonly canWrite = this.session.canWrite;
 
+  /** The identity-check offer for a publish/delete the bff refused for want of a
+   *  fresh MFA stamp (hugmesh-wiki-ui#4). A role 403 never opens it. */
+  readonly stepUp = new StepUpOffer();
+
   /**
    * Subscribe to the `:slug` route param and reload the page on navigation.
    * Handles in-app navigation between wiki pages without a full route change.
@@ -161,6 +167,9 @@ export class WikiPageViewComponent implements OnInit {
    * Sets `error` on failure with action-specific wording.
    */
   async reload(): Promise<void> {
+    // A write refused on the page this view showed before must not be retried
+    // against whatever it shows now.
+    this.stepUp.dismiss();
     this.loading.set(true);
     this.error.set('');
     this.publishMsg.set('');
@@ -187,17 +196,40 @@ export class WikiPageViewComponent implements OnInit {
    */
   async publish(): Promise<void> {
     if (!this.canWrite() || !this.page()) return;
+    this.stepUp.dismiss();
+    await this.runPublish(this.slug());
+  }
+
+  /** One publish of `slug`, fixed by the caller so a step-up retry re-issues
+   *  exactly the refused call. */
+  private async runPublish(slug: string): Promise<void> {
     this.publishing.set(true);
     this.publishMsg.set('');
     this.error.set('');
     try {
-      const res = await this.wiki.publishPage(this.slug());
+      const res = await this.wiki.publishPage(slug);
       this.publishMsg.set(`Published version ${res.version}. The next ZIM rebuild will package it.`);
     } catch (e) {
+      if (this.stepUp.offer(e, () => this.runPublish(slug))) {
+        this.error.set(stepUpMessage('Publishing this page'));
+        return;
+      }
       this.error.set(this.message(e, 'publish'));
     } finally {
       this.publishing.set(false);
     }
+  }
+
+  /** The identity check passed: re-issue the refused publish/delete, unchanged,
+   *  once. */
+  onStepUpSatisfied(): void {
+    this.error.set('');
+    this.stepUp.satisfy();
+  }
+
+  /** "Not now": close the offer and write nothing; the message stays. */
+  onStepUpDismissed(): void {
+    this.stepUp.dismiss();
   }
 
   /** Arm the inline delete confirmation. Guarded on WIKI_WRITE (the control is
@@ -246,22 +278,39 @@ export class WikiPageViewComponent implements OnInit {
   async remove(): Promise<void> {
     const target = this.page();
     if (!this.canWrite() || !target || this.deleting()) return;
+    this.stepUp.dismiss();
+    await this.runRemove(target, this.slug());
+  }
+
+  /**
+   * One delete of `slug` and its confirming re-read, against the page that was on
+   * screen when the user confirmed. Both are fixed by the caller so a step-up retry
+   * re-issues exactly the refused call and verifies it against the same row.
+   *
+   * @param target - The page the user confirmed deleting.
+   * @param slug - The route slug it was shown at.
+   */
+  private async runRemove(target: WikiPage, slug: string): Promise<void> {
     this.deleting.set(true);
     this.error.set('');
     this.publishMsg.set('');
     // The route param is the one slug guaranteed to be a string: every property of
     // the generated model is optional and getPage() casts, so a payload field is
     // never spliced into copy without a fallback (see {@link comparableById}).
-    const name = target.slug || this.slug();
+    const name = target.slug || slug;
     try {
-      await this.wiki.deletePage(this.slug());
+      await this.wiki.deletePage(slug);
     } catch (e) {
-      this.error.set(this.message(e, 'delete'));
+      if (this.stepUp.offer(e, () => this.runRemove(target, slug))) {
+        this.error.set(stepUpMessage('Deleting this page'));
+      } else {
+        this.error.set(this.message(e, 'delete'));
+      }
       this.deleting.set(false);
       return;
     }
     try {
-      const still = await this.wiki.getPage(this.slug());
+      const still = await this.wiki.getPage(slug);
       if (!comparableById(still, target)) {
         // Identity is the ENTIRE basis of the decision, so a re-read with no id
         // proves nothing — it must not fall through to `===` and read as a match.

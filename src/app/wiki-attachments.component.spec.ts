@@ -4,6 +4,16 @@ import { signal } from '@angular/core';
 import { WikiAttachmentsComponent } from './wiki-attachments.component';
 import { WikiService, WikiAttachment, WikiApiError } from './wiki.service';
 import { SessionService } from './session.service';
+import { provideRouter } from '@angular/router';
+import {
+  FakeStepUpDialog,
+  provideFakeStepUpLoader,
+  resetStepUpFakes,
+  roleRefusal,
+  settleFixture,
+  stepUpLoads,
+  stepUpRefusal,
+} from './step-up.testing';
 
 function att(over: Partial<WikiAttachment> = {}): WikiAttachment {
   return {
@@ -215,5 +225,111 @@ describe('WikiAttachmentsComponent (per-page attachments panel)', () => {
       expect(el().querySelector('[data-testid="wiki-att-error"]')!.textContent)
         .toContain('no longer exists');
     });
+  });
+});
+
+describe('WikiAttachmentsComponent: step-up on upload/delete (hugmesh-wiki-ui#4)', () => {
+  let fixture: ComponentFixture<WikiAttachmentsComponent>;
+  let wiki: jasmine.SpyObj<WikiService>;
+
+  beforeEach(async () => {
+    resetStepUpFakes();
+    wiki = jasmine.createSpyObj<WikiService>('WikiService', [
+      'listAttachments',
+      'uploadAttachment',
+      'deleteAttachment',
+      'downloadAttachment',
+    ]);
+    wiki.listAttachments.and.resolveTo({ attachments: [att()] });
+    await TestBed.configureTestingModule({
+      imports: [WikiAttachmentsComponent],
+      providers: [
+        provideRouter([]),
+        { provide: WikiService, useValue: wiki },
+        { provide: SessionService, useValue: { canWrite: signal(true) } },
+        provideFakeStepUpLoader(),
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(WikiAttachmentsComponent);
+    fixture.componentRef.setInput('slug', 'getting-started');
+    await settleFixture(fixture);
+  });
+
+  const q = (id: string) => (fixture.nativeElement as HTMLElement).querySelector(`[data-testid="${id}"]`);
+  const fileInput = () => q('wiki-att-file') as HTMLInputElement;
+
+  it('(a) a step-up refusal on delete shows the identity check in place of the role message', async () => {
+    wiki.deleteAttachment.and.rejectWith(stepUpRefusal());
+    await fixture.componentInstance.remove('diagram.png');
+    await settleFixture(fixture);
+    expect(q('wiki-step-up')).not.toBeNull();
+    expect(q('fake-dialog')).not.toBeNull();
+    expect(q('wiki-att-error')!.textContent).toContain('fresh identity check');
+    expect(q('wiki-att-error')!.textContent).not.toContain('requires the ADMIN or SUPERADMIN role');
+  });
+
+  it('(b) a role 403 keeps the role message and never loads the dialog', async () => {
+    wiki.uploadAttachment.and.rejectWith(roleRefusal());
+    pickFile(fileInput(), new File(['x'], 'notes.txt', { type: 'text/plain' }));
+    await fixture.componentInstance.upload(fileInput());
+    await settleFixture(fixture);
+    expect(q('wiki-att-error')!.textContent).toContain('requires the ADMIN or SUPERADMIN role');
+    expect(q('wiki-step-up')).toBeNull();
+    expect(stepUpLoads.count).toBe(0);
+  });
+
+  it('(c) satisfied re-sends the SAME upload once (same page, same File)', async () => {
+    const file = new File(['x'], 'notes.txt', { type: 'text/plain' });
+    wiki.uploadAttachment.and.returnValues(
+      Promise.reject(stepUpRefusal()),
+      Promise.resolve(att({ id: 'a2', filename: 'notes.txt' })),
+    );
+    pickFile(fileInput(), file);
+    await fixture.componentInstance.upload(fileInput());
+    await settleFixture(fixture);
+    expect(q('wiki-step-up')).not.toBeNull();
+
+    FakeStepUpDialog.last().satisfied.emit();
+    await settleFixture(fixture);
+
+    expect(wiki.uploadAttachment).toHaveBeenCalledTimes(2);
+    expect(wiki.uploadAttachment.calls.argsFor(1)).toEqual(['getting-started', file]);
+    expect(wiki.uploadAttachment.calls.argsFor(1)[1]).toBe(file);
+    expect(q('wiki-step-up')).toBeNull();
+    expect(q('wiki-att-notice')!.textContent).toContain('Uploaded notes.txt');
+  });
+
+  it('(c) satisfied re-sends the SAME delete once', async () => {
+    wiki.deleteAttachment.and.returnValues(Promise.reject(stepUpRefusal()), Promise.resolve());
+    await fixture.componentInstance.remove('diagram.png');
+    await settleFixture(fixture);
+    FakeStepUpDialog.last().satisfied.emit();
+    await settleFixture(fixture);
+    expect(wiki.deleteAttachment).toHaveBeenCalledTimes(2);
+    expect(wiki.deleteAttachment.calls.argsFor(1)).toEqual(['getting-started', 'diagram.png']);
+    expect(q('wiki-att-notice')!.textContent).toContain('Deleted diagram.png');
+  });
+
+  it('(d) dismissed re-sends nothing and leaves the message', async () => {
+    wiki.deleteAttachment.and.rejectWith(stepUpRefusal());
+    await fixture.componentInstance.remove('diagram.png');
+    await settleFixture(fixture);
+    FakeStepUpDialog.last().dismissed.emit();
+    await settleFixture(fixture);
+    expect(wiki.deleteAttachment).toHaveBeenCalledTimes(1);
+    expect(q('wiki-step-up')).toBeNull();
+    expect(q('wiki-att-error')!.textContent).toContain('fresh identity check');
+  });
+
+  it('a slug change drops the held write: the old page is never written', async () => {
+    wiki.deleteAttachment.and.rejectWith(stepUpRefusal());
+    await fixture.componentInstance.remove('diagram.png');
+    await settleFixture(fixture);
+    fixture.componentRef.setInput('slug', 'another-page');
+    await settleFixture(fixture);
+    expect(q('wiki-step-up')).toBeNull();
+    fixture.componentInstance.onStepUpSatisfied();
+    await settleFixture(fixture);
+    expect(wiki.deleteAttachment).toHaveBeenCalledTimes(1);
   });
 });
