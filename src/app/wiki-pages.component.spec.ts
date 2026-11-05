@@ -5,6 +5,15 @@ import { signal } from '@angular/core';
 import { WikiPagesComponent } from './wiki-pages.component';
 import { WikiService, PageSummary, WikiApiError } from './wiki.service';
 import { SessionService } from './session.service';
+import {
+  FakeStepUpDialog,
+  provideFakeStepUpLoader,
+  resetStepUpFakes,
+  roleRefusal,
+  settleFixture,
+  stepUpLoads,
+  stepUpRefusal,
+} from './step-up.testing';
 
 function summary(over: Partial<PageSummary> = {}): PageSummary {
   return { id: '1', slug: 'getting-started', title: 'Getting started', authorSubject: 's', version: 2, updatedAt: '2026-06-13T00:00:00Z', ...over };
@@ -387,5 +396,79 @@ describe('WikiPagesComponent (content list)', () => {
       expect(el().querySelector('[data-testid="wiki-pages-action-error"]')!.textContent)
         .toContain('does not exist');
     });
+  });
+});
+
+describe('WikiPagesComponent: step-up on delete (hugmesh-wiki-ui#4)', () => {
+  let fixture: ComponentFixture<WikiPagesComponent>;
+  let wiki: jasmine.SpyObj<WikiService>;
+  const runbook = summary({ id: '7', slug: 'runbook', title: 'Runbook' });
+
+  beforeEach(async () => {
+    resetStepUpFakes();
+    wiki = jasmine.createSpyObj<WikiService>('WikiService', ['listPages', 'deletePage']);
+    wiki.listPages.and.resolveTo({ pages: [summary(), runbook] });
+    await TestBed.configureTestingModule({
+      imports: [WikiPagesComponent],
+      providers: [
+        provideRouter([]),
+        { provide: WikiService, useValue: wiki },
+        { provide: SessionService, useValue: { canWrite: signal(true) } },
+        provideFakeStepUpLoader(),
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(WikiPagesComponent);
+    await settleFixture(fixture);
+  });
+
+  const q = (id: string) => (fixture.nativeElement as HTMLElement).querySelector(`[data-testid="${id}"]`);
+
+  it('(a) a step-up refusal shows the identity check in place of the role message', async () => {
+    wiki.deletePage.and.rejectWith(stepUpRefusal());
+    fixture.componentInstance.askDelete(runbook);
+    await fixture.componentInstance.remove(runbook);
+    await settleFixture(fixture);
+    expect(q('wiki-step-up')).not.toBeNull();
+    expect(q('fake-dialog')).not.toBeNull();
+    expect(q('wiki-pages-action-error')!.textContent).toContain('fresh identity check');
+    expect(q('wiki-pages-action-error')!.textContent).not.toContain('requires the ADMIN or SUPERADMIN role');
+  });
+
+  it('(b) a role 403 keeps the role message and never loads the dialog', async () => {
+    wiki.deletePage.and.rejectWith(roleRefusal());
+    fixture.componentInstance.askDelete(runbook);
+    await fixture.componentInstance.remove(runbook);
+    await settleFixture(fixture);
+    expect(q('wiki-pages-action-error')!.textContent).toContain('requires the ADMIN or SUPERADMIN role');
+    expect(q('wiki-step-up')).toBeNull();
+    expect(stepUpLoads.count).toBe(0);
+  });
+
+  it('(c) satisfied re-issues the SAME delete once and re-reads the list', async () => {
+    wiki.deletePage.and.returnValues(Promise.reject(stepUpRefusal()), Promise.resolve());
+    fixture.componentInstance.askDelete(runbook);
+    await fixture.componentInstance.remove(runbook);
+    await settleFixture(fixture);
+
+    wiki.listPages.and.resolveTo({ pages: [summary()] });
+    FakeStepUpDialog.last().satisfied.emit();
+    await settleFixture(fixture);
+
+    expect(wiki.deletePage).toHaveBeenCalledTimes(2);
+    expect(wiki.deletePage.calls.argsFor(1)).toEqual(['runbook']);
+    expect(q('wiki-step-up')).toBeNull();
+    expect(q('wiki-pages-notice')!.textContent).toContain('Deleted runbook');
+  });
+
+  it('(d) dismissed re-issues nothing and leaves the message', async () => {
+    wiki.deletePage.and.rejectWith(stepUpRefusal());
+    fixture.componentInstance.askDelete(runbook);
+    await fixture.componentInstance.remove(runbook);
+    await settleFixture(fixture);
+    FakeStepUpDialog.last().dismissed.emit();
+    await settleFixture(fixture);
+    expect(wiki.deletePage).toHaveBeenCalledTimes(1);
+    expect(q('wiki-step-up')).toBeNull();
+    expect(q('wiki-pages-action-error')!.textContent).toContain('fresh identity check');
   });
 });

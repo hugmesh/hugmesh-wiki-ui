@@ -1,11 +1,20 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { BehaviorSubject, map, of } from 'rxjs';
 import { signal } from '@angular/core';
 
 import { WikiPageViewComponent } from './wiki-page-view.component';
 import { WikiService, WikiPage, WikiApiError } from './wiki.service';
 import { SessionService } from './session.service';
+import {
+  FakeStepUpDialog,
+  provideFakeStepUpLoader,
+  resetStepUpFakes,
+  roleRefusal,
+  settleFixture,
+  stepUpLoads,
+  stepUpRefusal,
+} from './step-up.testing';
 
 function page(over: Partial<WikiPage> = {}): WikiPage {
   return {
@@ -373,5 +382,114 @@ describe('WikiPageViewComponent (rendered page)', () => {
     expect(err.textContent).toContain('ADMIN or SUPERADMIN');
     expect(el().querySelector('[data-testid="wiki-view-deleted"]')).toBeNull();
     expect(el().querySelector('[data-testid="wiki-view-title"]')).not.toBeNull();
+  });
+});
+
+describe('WikiPageViewComponent: step-up on publish/delete (hugmesh-wiki-ui#4)', () => {
+  let fixture: ComponentFixture<WikiPageViewComponent>;
+  let wiki: jasmine.SpyObj<WikiService>;
+  let params: BehaviorSubject<string>;
+
+  beforeEach(async () => {
+    resetStepUpFakes();
+    params = new BehaviorSubject('getting-started');
+    wiki = jasmine.createSpyObj<WikiService>('WikiService', ['getPage', 'publishPage', 'deletePage', 'listAttachments']);
+    wiki.getPage.and.resolveTo(page());
+    wiki.listAttachments.and.resolveTo({ attachments: [] });
+    const route = { paramMap: params.pipe(map((s) => ({ get: (_: string) => s }))) } as unknown as ActivatedRoute;
+    await TestBed.configureTestingModule({
+      imports: [WikiPageViewComponent],
+      providers: [
+        provideRouter([]),
+        { provide: WikiService, useValue: wiki },
+        { provide: SessionService, useValue: { canWrite: signal(true) } },
+        { provide: ActivatedRoute, useValue: route },
+        provideFakeStepUpLoader(),
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(WikiPageViewComponent);
+    await settleFixture(fixture);
+  });
+
+  const q = (id: string) => (fixture.nativeElement as HTMLElement).querySelector(`[data-testid="${id}"]`);
+
+  it('(a) a step-up refusal on publish shows the identity check in place of the role message', async () => {
+    wiki.publishPage.and.rejectWith(stepUpRefusal());
+    await fixture.componentInstance.publish();
+    await settleFixture(fixture);
+    expect(q('wiki-step-up')).not.toBeNull();
+    expect(q('fake-dialog')).not.toBeNull();
+    expect(q('wiki-view-action-error')!.textContent).toContain('fresh identity check');
+    expect(q('wiki-view-action-error')!.textContent).not.toContain('does not permit authoring');
+  });
+
+  it('(b) a role 403 on delete keeps the role message and never loads the dialog', async () => {
+    wiki.deletePage.and.rejectWith(roleRefusal());
+    fixture.componentInstance.askDelete();
+    await fixture.componentInstance.remove();
+    await settleFixture(fixture);
+    expect(q('wiki-view-action-error')!.textContent).toContain('requires the ADMIN or SUPERADMIN role');
+    expect(q('wiki-step-up')).toBeNull();
+    expect(stepUpLoads.count).toBe(0);
+  });
+
+  it('(c) satisfied re-issues the SAME publish once', async () => {
+    wiki.publishPage.and.returnValues(
+      Promise.reject(stepUpRefusal()),
+      Promise.resolve({ state: 'published', slug: 'getting-started', version: 3 }),
+    );
+    await fixture.componentInstance.publish();
+    await settleFixture(fixture);
+    FakeStepUpDialog.last().satisfied.emit();
+    await settleFixture(fixture);
+    expect(wiki.publishPage).toHaveBeenCalledTimes(2);
+    expect(wiki.publishPage.calls.argsFor(1)).toEqual(['getting-started']);
+    expect(q('wiki-step-up')).toBeNull();
+    expect(q('wiki-view-publish-msg')!.textContent).toContain('Published version 3');
+  });
+
+  it('(c) satisfied re-issues the SAME delete once and verifies it', async () => {
+    wiki.deletePage.and.returnValues(Promise.reject(stepUpRefusal()), Promise.resolve());
+    fixture.componentInstance.askDelete();
+    await fixture.componentInstance.remove();
+    await settleFixture(fixture);
+    expect(q('wiki-step-up')).not.toBeNull();
+
+    wiki.getPage.and.rejectWith(new WikiApiError(404, 'gone'));
+    FakeStepUpDialog.last().satisfied.emit();
+    await settleFixture(fixture);
+
+    expect(wiki.deletePage).toHaveBeenCalledTimes(2);
+    expect(wiki.deletePage.calls.argsFor(1)).toEqual(['getting-started']);
+    expect(q('wiki-view-deleted')!.textContent).toContain('Deleted getting-started');
+  });
+
+  it('(d) dismissed re-issues nothing and leaves the message', async () => {
+    wiki.publishPage.and.rejectWith(stepUpRefusal());
+    await fixture.componentInstance.publish();
+    await settleFixture(fixture);
+    FakeStepUpDialog.last().dismissed.emit();
+    await settleFixture(fixture);
+    expect(wiki.publishPage).toHaveBeenCalledTimes(1);
+    expect(q('wiki-step-up')).toBeNull();
+    expect(q('wiki-view-action-error')!.textContent).toContain('fresh identity check');
+  });
+
+  it('navigating to another page drops the held delete: it is never retried there', async () => {
+    wiki.deletePage.and.rejectWith(stepUpRefusal());
+    fixture.componentInstance.askDelete();
+    await fixture.componentInstance.remove();
+    await settleFixture(fixture);
+    const dialogs = FakeStepUpDialog.instances.length;
+
+    wiki.getPage.and.resolveTo(page({ id: '2', slug: 'other-page' }));
+    params.next('other-page');
+    await settleFixture(fixture);
+    expect(q('wiki-step-up')).toBeNull();
+    fixture.componentInstance.onStepUpSatisfied();
+    await settleFixture(fixture);
+
+    expect(FakeStepUpDialog.instances.length).toBe(dialogs);
+    expect(wiki.deletePage).toHaveBeenCalledTimes(1);
   });
 });

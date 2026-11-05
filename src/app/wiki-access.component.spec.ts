@@ -4,6 +4,16 @@ import { signal } from '@angular/core';
 import { WikiAccessComponent } from './wiki-access.component';
 import { WikiService, WikiAccess, WikiApiError, BrandCatalog } from './wiki.service';
 import { SessionService } from './session.service';
+import { provideRouter } from '@angular/router';
+import {
+  FakeStepUpDialog,
+  provideFakeStepUpLoader,
+  resetStepUpFakes,
+  roleRefusal,
+  settleFixture,
+  stepUpLoads,
+  stepUpRefusal,
+} from './step-up.testing';
 
 function access(over: Partial<WikiAccess> = {}): WikiAccess {
   return {
@@ -1164,5 +1174,105 @@ describe('WikiAccessComponent (grant/timeout/ban console)', () => {
         .toBe('wiki-access-target-domain-help wiki-access-target-domain-err');
       expect(el().querySelector('#wiki-access-target-domain-err')).not.toBeNull();
     });
+  });
+});
+
+describe('WikiAccessComponent: step-up on access writes (hugmesh-wiki-ui#4)', () => {
+  let fixture: ComponentFixture<WikiAccessComponent>;
+  let wiki: jasmine.SpyObj<WikiService>;
+
+  beforeEach(async () => {
+    resetStepUpFakes();
+    wiki = jasmine.createSpyObj<WikiService>('WikiService',
+      ['grant', 'timeout', 'ban', 'revoke', 'observedBrands', 'brandCatalog']);
+    wiki.observedBrands.and.resolveTo([]);
+    wiki.brandCatalog.and.rejectWith(new WikiApiError(403, 'not a superadmin'));
+    await TestBed.configureTestingModule({
+      imports: [WikiAccessComponent],
+      providers: [
+        provideRouter([]),
+        { provide: WikiService, useValue: wiki },
+        { provide: SessionService, useValue: { canManage: signal(false) } },
+        provideFakeStepUpLoader(),
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(WikiAccessComponent);
+    await settleFixture(fixture);
+  });
+
+  const q = (id: string) => (fixture.nativeElement as HTMLElement).querySelector(`[data-testid="${id}"]`);
+
+  it('(a) a step-up refusal on grant shows the identity check in place of the role message', async () => {
+    const c = fixture.componentInstance;
+    c.userSubject.set('google:bob@x.com');
+    wiki.grant.and.rejectWith(stepUpRefusal());
+    await c.submit();
+    await settleFixture(fixture);
+    expect(q('wiki-step-up')).not.toBeNull();
+    expect(q('fake-dialog')).not.toBeNull();
+    expect(q('wiki-access-error')!.textContent).toContain('fresh identity check');
+    expect(q('wiki-access-error')!.textContent).not.toContain('does not permit managing');
+    expect(q('wiki-step-up')!.closest('form')).toBeNull();
+  });
+
+  it('(b) a role 403 keeps the role message and never loads the dialog', async () => {
+    const c = fixture.componentInstance;
+    c.setAction('ban');
+    c.userSubject.set('u');
+    wiki.ban.and.rejectWith(roleRefusal());
+    await c.submit();
+    await settleFixture(fixture);
+    expect(q('wiki-access-error')!.textContent).toContain('does not permit managing wiki access');
+    expect(q('wiki-step-up')).toBeNull();
+    expect(stepUpLoads.count).toBe(0);
+  });
+
+  it('(c) satisfied re-sends the SAME timeout once, even after the form moved on', async () => {
+    const c = fixture.componentInstance;
+    c.setAction('timeout');
+    c.userSubject.set('u');
+    c.timeoutHours.set(2);
+    c.reason.set('spam');
+    wiki.timeout.and.returnValues(
+      Promise.reject(stepUpRefusal()),
+      Promise.resolve(access({ accessType: 'banned', expiresAt: '2030-01-01' })),
+    );
+    await c.submit();
+    await settleFixture(fixture);
+
+    c.userSubject.set('someone-else');
+    c.timeoutHours.set(99);
+    FakeStepUpDialog.last().satisfied.emit();
+    await settleFixture(fixture);
+
+    expect(wiki.timeout).toHaveBeenCalledTimes(2);
+    expect(wiki.timeout.calls.argsFor(1)).toEqual([{ userSubject: 'u', ttlSeconds: 7200, reason: 'spam' }]);
+    expect(q('wiki-step-up')).toBeNull();
+    expect(q('wiki-access-result')).not.toBeNull();
+  });
+
+  it('(c) satisfied re-sends the SAME revoke once', async () => {
+    wiki.revoke.and.returnValues(Promise.reject(stepUpRefusal()), Promise.resolve());
+    await fixture.componentInstance.restore('google:bob@x.com');
+    await settleFixture(fixture);
+    expect(q('wiki-step-up')).not.toBeNull();
+    FakeStepUpDialog.last().satisfied.emit();
+    await settleFixture(fixture);
+    expect(wiki.revoke).toHaveBeenCalledTimes(2);
+    expect(wiki.revoke.calls.argsFor(1)).toEqual(['banned', 'google:bob@x.com']);
+    expect(q('wiki-access-notice')!.textContent).toContain('restored');
+  });
+
+  it('(d) dismissed re-sends nothing and leaves the message', async () => {
+    const c = fixture.componentInstance;
+    c.userSubject.set('u');
+    wiki.grant.and.rejectWith(stepUpRefusal());
+    await c.submit();
+    await settleFixture(fixture);
+    FakeStepUpDialog.last().dismissed.emit();
+    await settleFixture(fixture);
+    expect(wiki.grant).toHaveBeenCalledTimes(1);
+    expect(q('wiki-step-up')).toBeNull();
+    expect(q('wiki-access-error')!.textContent).toContain('fresh identity check');
   });
 });

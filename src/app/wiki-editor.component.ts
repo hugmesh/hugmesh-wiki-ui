@@ -11,6 +11,8 @@ import {
   SLUG_PATTERN,
 } from './wiki.service';
 import { renderMarkdown } from './markdown';
+import { StepUpOffer, stepUpMessage } from './step-up-offer';
+import { WikiStepUpComponent } from './wiki-step-up.component';
 
 /**
  * The wiki EDITOR — create (route 'new', no slug) and edit (route
@@ -34,7 +36,7 @@ import { renderMarkdown } from './markdown';
 @Component({
   selector: 'hug-wiki-editor',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, WikiStepUpComponent],
   templateUrl: './wiki-editor.component.html',
   styleUrl: './wiki-editor.component.scss',
 })
@@ -59,6 +61,10 @@ export class WikiEditorComponent implements OnInit {
   readonly touched = signal(false);
 
   readonly isEdit = computed(() => this.editingSlug() !== null);
+
+  /** The identity-check offer for a save the bff refused for want of a fresh MFA
+   *  stamp (hugmesh-wiki-ui#4). A role 403 never opens it. */
+  readonly stepUp = new StepUpOffer();
 
   /**
    * Determine the editor mode from the route:
@@ -168,30 +174,66 @@ export class WikiEditorComponent implements OnInit {
     this.error.set('');
     this.notice.set('');
     if (!this.formValid()) return;
+    // A new save supersedes one still waiting on the identity check: its held
+    // retry must never fire after this one.
+    this.stepUp.dismiss();
+    // The request is fixed HERE, from the form as it stands at submit, so a retry
+    // after a step-up check re-issues exactly this write even if a field has been
+    // edited while the check was open.
+    if (this.isEdit()) {
+      const slug = this.editingSlug()!;
+      const body = {
+        title: this.title().trim(),
+        contentMarkdown: this.body(),
+        // Pass the version we loaded so the BFF can detect a concurrent overwrite (409).
+        expectedVersion: this.expectedVersion(),
+      };
+      await this.save(() => this.wiki.updatePage(slug, body), ['../../']);
+    } else {
+      const body = {
+        slug: this.slug().trim(),
+        title: this.title().trim(),
+        contentMarkdown: this.body(),
+      };
+      await this.save(() => this.wiki.createPage(body), ['../pages']);
+    }
+  }
+
+  /**
+   * Issue one save and route its outcome. On a step-up refusal the identical
+   * request is held for {@link onStepUpSatisfied}.
+   *
+   * @param request - The create or update call, its arguments already fixed.
+   * @param to - Where the saved page lives, relative to this route.
+   */
+  private async save(request: () => Promise<WikiPage>, to: string[]): Promise<void> {
     this.busy.set(true);
+    this.error.set('');
+    this.conflict.set(false);
     try {
-      if (this.isEdit()) {
-        const slug = this.editingSlug()!;
-        const pg = await this.wiki.updatePage(slug, {
-          title: this.title().trim(),
-          contentMarkdown: this.body(),
-          // Pass the version we loaded so the BFF can detect a concurrent overwrite (409).
-          expectedVersion: this.expectedVersion(),
-        });
-        void this.router.navigate(['../../', pg.slug], { relativeTo: this.route });
-      } else {
-        const pg = await this.wiki.createPage({
-          slug: this.slug().trim(),
-          title: this.title().trim(),
-          contentMarkdown: this.body(),
-        });
-        void this.router.navigate(['../pages', pg.slug], { relativeTo: this.route });
-      }
+      const pg = await request();
+      void this.router.navigate([...to, pg.slug], { relativeTo: this.route });
     } catch (e) {
+      if (this.stepUp.offer(e, () => this.save(request, to))) {
+        this.error.set(stepUpMessage('Saving this page'));
+        return;
+      }
       this.handleError(e);
     } finally {
       this.busy.set(false);
     }
+  }
+
+  /** The identity check passed: re-issue the refused save, unchanged, once. */
+  onStepUpSatisfied(): void {
+    this.error.set('');
+    this.stepUp.satisfy();
+  }
+
+  /** "Not now": close the offer, save nothing; the message stays, and Save
+   *  re-offers the check. */
+  onStepUpDismissed(): void {
+    this.stepUp.dismiss();
   }
 
   /**

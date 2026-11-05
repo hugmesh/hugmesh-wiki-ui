@@ -116,6 +116,9 @@
       @if (actionError()) {
         <p class="wiki-error" role="alert" data-testid="wiki-pages-action-error">{{ actionError() }}</p>
       }
+      @if (stepUp.open()) {
+        <hug-wiki-step-up (satisfied)="onStepUpSatisfied()" (dismissed)="onStepUpDismissed()" />
+      }
     </section>
   }
 </div>

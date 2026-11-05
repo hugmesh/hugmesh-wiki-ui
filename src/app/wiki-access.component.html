@@ -281,6 +281,9 @@
   @if (error()) {
     <p class="wiki-error" role="alert" data-testid="wiki-access-error">{{ error() }}</p>
   }
+  @if (stepUp.open()) {
+    <hug-wiki-step-up (satisfied)="onStepUpSatisfied()" (dismissed)="onStepUpDismissed()" />
+  }
 
   @if (result(); as r) {
     <section class="wiki-access__result wiki-panel" role="status" aria-label="Access change result" data-testid="wiki-access-result">
