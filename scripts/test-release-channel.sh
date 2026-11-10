@@ -553,6 +553,9 @@ lacks() {
 }
 has "push trigger includes release/**" "branches: [main, 'release/**']"
 has "tag trigger is v*" "tags: ['v*']"
+# The org release script (hugmesh-generator scripts/release.sh --channel stable) refuses
+# a repo whose release.yml lacks this literal marker next to the release/** trigger.
+has "stable-channel marker for the org release script" "# hugmesh-release-channels: beta+stable"
 has "version job runs this self-test" "run: bash scripts/test-release-channel.sh"
 has "version job calls release-channel.sh" "bash scripts/release-channel.sh)"
 has "version regex still in the version job" '^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$'
