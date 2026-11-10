@@ -2,6 +2,10 @@ name: Release
 
 # Builds the wiki-ui container image and pushes it to GHCR.
 #
+# hugmesh-release-channels: beta+stable
+# (the marker the org release script, hugmesh-generator scripts/release.sh --channel stable,
+# looks for next to the release/** trigger before it cuts a stable release of this repo)
+#
 # The release channel comes from the TAG (scripts/release-channel.sh decides
 # every case below and is tested by scripts/test-release-channel.sh):
 #
